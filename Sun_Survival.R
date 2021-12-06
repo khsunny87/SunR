@@ -6,6 +6,8 @@ library(moonBook)
 library(purrr)
 
 
+
+
 Get_median_fu<-function(TS){
   ret<-survfit(Surv(TS[,1],1-TS[,2])~1)
   return(summary(ret)$table['median']%>%round(2))
@@ -66,7 +68,7 @@ UV_Cox<-function(data,TS_name,Dx_data=T){
 }
 
 
-MV_Cox<-function(data,TS_name,trace=T,rename=F,keep_variable='1',plot_title='Hazard ratio'){
+MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plot_title='Hazard ratio'){
   
   if(keep_variable!=1){
   item_list<-names(data)
@@ -78,13 +80,21 @@ MV_Cox<-function(data,TS_name,trace=T,rename=F,keep_variable='1',plot_title='Haz
 
   MV_trim<-data%>%
     mutate_if(is.logical,~if_else(.x,1,0))%>%
-    na.omit()%>%
+    #na.omit()%>%
+    filter(complete.cases(.))%>%
     as.data.frame()
-
+  if(rename){
+  trim_label<-Labels%>%
+    filter(`변수`%in%names(MV_trim))
+  MV_trim[trim_label$변수]<-set_label(MV_trim[trim_label$변수],label=trim_label$변수설명)
+  }
+  
+  
   MV_COX_res<-coxph(formula(paste(TS_name,'~ .')),data=MV_trim)%>%
     step(., scope = list(lower=  formula(paste('~',keep_variable))), direction = "both")
     
-ret_list<-list(MV_data=MV_trim,MV_model=MV_COX_res,MV_forest=ggforest(MV_COX_res,data=MV_trim,main=plot_title))
+ret_list<-list(MV_data=MV_trim,MV_model=MV_COX_res)#,MV_forest=ggforest(MV_COX_res,data=MV_trim,main=plot_title))
+return(ret_list)
 
 if(!rename) return(ret_list)
 
