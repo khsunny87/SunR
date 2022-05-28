@@ -1,0 +1,33 @@
+7 6
+7
+A 1 4 box black "A"
+Ex 2 5 box black "Ex"
+B 3 4 box black "B"
+C 5 3 box black "C"
+D 5 5 box blue "D"
+E 7 2 box green "E"
+F 7 4 box green "F"
+7 
+NN1 2 4 
+NN2 4 3
+NN3 4 4
+NN4 4 5
+NN5 6 2
+NN6 6 3
+NN7 6 4
+1 
+G 1 2 "Randomized"
+13
+A NN1 1 
+NN1 Ex 2
+NN1 B 2
+B NN3 1
+NN2 NN3 1
+NN3 NN4 1
+NN2 C 2
+NN4 D 2
+C NN6 1
+NN5 NN6 1
+NN6 NN7 1
+NN5 E 2
+NN7 F 2
