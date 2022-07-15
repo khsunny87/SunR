@@ -40,10 +40,26 @@ paste_comma<-function(...){
   paste(...,sep=',')
 }
 
+
+Get_df_list<-function(df_list){
+  tmp<-ifelse(!is.na(df_list),paste(names(df_list),'=',df_list),NA)
+  return(paste(tmp[!is.na(tmp)],collapse=','))
+}
+
+
 Get_attr<-function(g_df){
+df_attr<-g_df%>%
+  select(starts_with('attr'))
+names(df_attr)<-str_remove(names(df_attr),'attr_')
+return(map_chr(c(1:nrow(df_attr)),~Get_df_list(df_attr[.x,])))
+}
+
+
+Get_attr2<-function(g_df){
   df_attr<-names(g_df)[startsWith(names(g_df),'attr')]
   return(map(df_attr,~paste0(str_remove(.x,'attr_'),'=',g_df[[.x]]))%>%do.call(paste_comma,.))
 }
+
 
 
 Set_text_node<-function(ndf,text_df){
@@ -189,11 +205,15 @@ Consort2Graphviz<-function(consort_list){
 
 consort<-Get_CONSORT("graph.txt")
 
+consort$node$attr_style[consort$node$name=='B']="filled"
+consort$node$attr_fillcolor[consort$node$name=='B']="yellow"
 consort$node$attr_label[consort$node$name=='A']="'Sibal'"
 consort$node$attr_label
 FC<-Consort2Graphviz(consort)
+FC
+cat(FC)
 grViz(FC)
-
+View(consort$node)
 grViz(FC)%>%
   #grViz(flowchart)%>%
   export_svg() %>%
