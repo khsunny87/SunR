@@ -1,7 +1,7 @@
 library(Microsoft365R)
 library(stringr)
 
-Get_Excel_from_Onedrive<-function(proj_name,input_path='Input'){
+Get_Excel_from_Onedrive<-function(proj_name,input_path='Input/Raw'){
 
 #od <- get_personal_onedrive(auth_type="device_code") #Ubunbu
 od <- get_personal_onedrive() #Mac
