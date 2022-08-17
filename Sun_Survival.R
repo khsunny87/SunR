@@ -13,18 +13,26 @@ Get_median_fu<-function(TS){
   return(summary(ret)$table['median']%>%round(2))
 }
 
-Survival_Table<-function(TS,strata,time_point,unit){
-  
-  survfit(TS~1)%>%
+Survival_Table<-function(TS,strata=1,time_point,unit){
+  overall<-survfit(TS~1)%>%
     summary(times=time_point)%>%.[c('time','surv','std.err')]%>%as.data.frame()%>%
     mutate(strata='Overall')%>%
     mutate(value=paste(format(round(surv*100,1),nsmall=1),'±',format(round(std.err*100,1),nsmall=1),'%'))%>%
-    select(time,strata,value)%>%
+    select(time,strata,value)
+  
+    if(length(strata)==1) {
+      if(strata==1){
+        return(overall%>%
+        pivot_wider(names_from='time',names_prefix=paste0(unit,' '),values_from='value'))
+        
+    }}
+
+    return(overall%>%
     rbind(.,survfit(TS~strata)%>%
             summary(times=time_point)%>%.[c('strata','time','surv','std.err')]%>%as.data.frame()%>%
             mutate(value=paste(format(round(surv*100,1),nsmall=1),'±',format(round(std.err*100,1),nsmall=1),'%'))%>%
             select(time,strata,value))%>%
-    pivot_wider(names_from='time',names_prefix=paste0(unit,' '),values_from='value')
+    pivot_wider(names_from='time',names_prefix=paste0(unit,' '),values_from='value'))
   
 }
 
@@ -83,6 +91,7 @@ MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plo
     #na.omit()%>%
     filter(complete.cases(.))%>%
     as.data.frame()
+  
   if(rename){
   trim_label<-Labels%>%
     filter(`변수`%in%names(MV_trim))
