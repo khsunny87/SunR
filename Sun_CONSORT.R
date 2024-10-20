@@ -7,7 +7,7 @@ library(rsvg)
 
 
 
-
+#edge
 # 0 null
 # 1 none
 # 2 forward
@@ -154,6 +154,7 @@ if (n_plain>0) plain_node<-data.frame(name=fdata[seq(f_ind,f_ind+n_plain-1),1],
 
 total_nodes<-rbind(text_node,null_node,plain_node)
 
+
 n_edge<-as.numeric(fdata[f_ind+n_plain,1])
 f_ind=f_ind+n_plain+1
 
@@ -168,7 +169,6 @@ node_df<-Init_nodes(n_R,n_C)%>%
   Set_text_node(text_node)%>%
   Set_plain_node(plain_node)%>%
   Set_null_node(null_node)
-
 
 i_edge_df<-Init_edges(n_R,n_C)
 

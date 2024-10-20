@@ -34,7 +34,7 @@ Get_Num<-function(num,digits=2){
 
 
 
-Plot_forest<-function(plot_df,main="Hazard ratio",fontsize=0.7,cpositions=c(0.02, 0.22, 0.4)){
+Plot_forest<-function(plot_df,main="Hazard ratio",fontsize=0.7,cpositions=c(0.02, 0.22, 0.4),showN=T){
     plot_df$N<-paste0('(N=',plot_df$N,')')
     plot_df$color<-if_else(plot_df$color=="","black",plot_df$color)
     plot_df$exp_estimate<-if_else(plot_df$ref,'reference',Get_Num(exp(plot_df$estimate)))
@@ -96,10 +96,10 @@ Plot_forest<-function(plot_df,main="Hazard ratio",fontsize=0.7,cpositions=c(0.02
                size = annot_size_mm)+
       annotate(geom = "text", x = x_annotate, y = exp(y_nlevel), hjust = 0,
                label = plot_df$level, vjust = -0.1, size = annot_size_mm)+
-      annotate(geom = "text", x = x_annotate, y = exp(y_nlevel),
-               label = plot_df$N, fontface = "italic", hjust = 0,
-               vjust = ifelse(plot_df$level == "", .5, 1.1),
-               size = annot_size_mm)+
+      #annotate(geom = "text", x = x_annotate, y = exp(y_nlevel),
+      #         label = plot_df$N, fontface = "italic", hjust = 0,
+      #         vjust = ifelse(plot_df$level == "", .5, 1.1),
+      #         size = annot_size_mm)+
       annotate(geom = "text", x = x_annotate, y = exp(y_cistring),
                label = plot_df$exp_estimate, size = annot_size_mm,
                vjust = ifelse(plot_df$exp_estimate== "reference", .5, -0.1))+
@@ -109,7 +109,13 @@ Plot_forest<-function(plot_df,main="Hazard ratio",fontsize=0.7,cpositions=c(0.02
       annotate(geom = "text", x = x_annotate, y = exp(y_stars),
                label = Render_P(plot_df$p.value), size = annot_size_mm,
                hjust = -0.2,  fontface = "italic")
-      
+      if(showN==T){
+        ret=ret+annotate(geom = "text", x = x_annotate, y = exp(y_nlevel),
+                 label = plot_df$N, fontface = "italic", hjust = 0,
+                 vjust = ifelse(plot_df$level == "", .5, 1.1),
+                 size = annot_size_mm)
+          
+      }
     
     return(ret)
     }

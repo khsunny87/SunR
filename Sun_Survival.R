@@ -6,10 +6,20 @@ library(moonBook)
 library(purrr)
 library(tidyr)
 
+toIQR<-function(quant){
+  paste0(quant['50'],' (',quant['25'],'-',quant['75'],')')
+}
 
+Get_median_fu<-function(TS,digits=2){
+  ifelse(TS[,2]==0,1,0)
+  #ret<-survfit(Surv(TS[,1],1-TS[,2])~1)
+  ret<-survfit(Surv(TS[,1],ifelse(TS[,2]==0,1,0))~1)
+  #return(summary(ret)$table['median']%>%round(2))
+  return(round(quantile(ret)$quantile,digits))
+}
 
-Get_median_fu<-function(TS){
-  ret<-survfit(Surv(TS[,1],1-TS[,2])~1)
+Get_median_fu2<-function(TS){
+  ret<-survfit(Surv(TS[,1],ifelse(TS[,2]==0,1,0))~1)
   return(summary(ret)$table['median']%>%round(2))
 }
 
@@ -76,7 +86,7 @@ UV_Cox<-function(data,TS_name,Dx_data=T){
 }
 
 
-MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plot_title='Hazard ratio'){
+MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plot_title='Hazard ratio',cox_method=coxph){
   
   if(keep_variable!=1){
   item_list<-names(data)
@@ -99,7 +109,7 @@ MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plo
   }
   
   
-  MV_COX_res<-coxph(formula(paste(TS_name,'~ .')),data=MV_trim)%>%
+  MV_COX_res<-cox_method(formula(paste(TS_name,'~ .')),data=MV_trim)%>%
     step(., scope = list(lower=  formula(paste('~',keep_variable))), direction = "both")
     
 ret_list<-list(MV_data=MV_trim,MV_model=MV_COX_res)#,MV_forest=ggforest(MV_COX_res,data=MV_trim,main=plot_title))
@@ -114,7 +124,7 @@ ren_MV_trim<-MV_trim%>%
 names(ren_MV_trim)[-1]<-map_chr(names(ren_MV_trim)[-1],~ifelse(.x%in%Labels$`변수`,Labels$`변수설명`[Labels$`변수`==.x],.x))
 
 
-ren_MV_COX_res<-coxph(formula(paste(TS_name,'~ .')),data=ren_MV_trim)
+ren_MV_COX_res<-cox_method(formula(paste(TS_name,'~ .')),data=ren_MV_trim)
 
 return(append(ret_list,list(ren_MV_model=ren_MV_COX_res,ren_MV_forest=ggforest(ren_MV_COX_res,data=ren_MV_trim,main=plot_title))))
 }
