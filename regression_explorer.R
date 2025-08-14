@@ -80,6 +80,8 @@ ui <- fluidPage(
                  DTOutput("univ_table")),
         tabPanel(
           "Model result",
+          h4("Model formula"),
+          verbatimTextOutput("formula_txt"),
           h4("Cleaning"),
           checkboxInput(
             "drop_na",
@@ -103,8 +105,7 @@ ui <- fluidPage(
           actionButton("fit", "Fit Model", class = "btn-primary"),
           hr(),
           
-          h5("Model formula"),
-          verbatimTextOutput("formula_txt"),
+
           h5("Coefficients"),
           DTOutput("coef_table"),
           h5("Model diagnostics / notes"),
@@ -132,6 +133,17 @@ ui <- fluidPage(
 # 서버 로직 시작
 # ---------------------
 server <- function(input, output, session) {
+  # --- 공통 스타일 함수: P<0.05 행 하이라이트 ---
+highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
+  DT::formatStyle(
+    dt_widget,
+    sig_col, target = "row",
+    backgroundColor = DT::styleEqual(c("ns","sig"), c(NA, "yellow")),
+    color          = DT::styleEqual(c("ns","sig"), c(NA, "red")),
+    fontWeight     = DT::styleEqual(c("ns","sig"), c("normal", "bold"))
+  )
+}
+
   rv <- reactiveValues(sel = character(0), force = character(0))  # 선택/강제포함 상태 저장
   
   fit_store <- reactiveVal(NULL)   # 현재 적합된 멀티변수 모델을 보관/초기화용
@@ -383,7 +395,7 @@ server <- function(input, output, session) {
       character(1)
     )
     
-    # (5) 보기 좋은 형식(원래 너 포맷 유지)
+    # (5) 보기 좋은 형식(원래 너 포맷 유지) + 시그널 컬럼 추가
     out <- base %>%
       dplyr::mutate(
         CI_low  = ifelse(is.na(effect), NA, effect - 1.96 * se),
@@ -392,7 +404,9 @@ server <- function(input, output, session) {
           is.na(p) ~ NA_character_,
           p < 0.001 ~ "<0.001",
           TRUE ~ sprintf("%.3f", p)
-        )
+        ),
+        # 시그널 플래그 (행 하이라이트용 숨김 컬럼)
+        .__sig__ = dplyr::case_when(!is.na(p) & p < 0.05 ~ "sig", TRUE ~ "ns")
       ) %>%
       dplyr::transmute(
         Select, `Force-in`,
@@ -400,32 +414,40 @@ server <- function(input, output, session) {
         Effect   = round(effect, 4),
         `95% CI` = ifelse(is.na(CI_low), NA_character_,
                           paste0("(", round(CI_low, 4), ", ", round(CI_high, 4), ")")),
-        `p-value`
+        `p-value`,
+        .__sig__    # ← 반드시 포함 (숨김용)
       )
     
     # (6) 모델타입에 맞춰 Effect 헤더명 교체 (β / OR / HR)
     eff_name <- switch(input$model_type, "linear"="β", "logistic"="OR", "cox"="HR")
     names(out)[names(out) == "Effect"] <- eff_name
     
+    # 숨김 컬럼 인덱스 (DataTables는 0-based)
+    sig_idx <- which(names(out) == ".__sig__") - 1
+    
     DT::datatable(
       out,
       escape = FALSE, selection = "none", rownames = FALSE,
-      options = list(scrollX = TRUE, pageLength = 10, ordering = FALSE),
+      options = list(
+        scrollX = TRUE, pageLength = 10, ordering = FALSE,
+        columnDefs = list(list(visible = FALSE, targets = sig_idx))
+      ),
       callback = DT::JS("
-      table.on('change', 'input.selChk', function() {
-        var id = $(this).attr('id');
-        var v  = id.replace('sel_','');
-        var checked = $(this).is(':checked');
-        Shiny.setInputValue('sel_changed', {var: v, checked: checked, nonce: Math.random()}, {priority: 'event'});
-      });
-      table.on('change', 'input.forceChk', function() {
-        var id = $(this).attr('id');
-        var v  = id.replace('force_','');
-        var checked = $(this).is(':checked');
-        Shiny.setInputValue('force_changed', {var: v, checked: checked, nonce: Math.random()}, {priority: 'event'});
-      });
-    ")
-    )
+    table.on('change', 'input.selChk', function() {
+      var id = $(this).attr('id');
+      var v  = id.replace('sel_','');
+      var checked = $(this).is(':checked');
+      Shiny.setInputValue('sel_changed', {var: v, checked: checked, nonce: Math.random()}, {priority: 'event'});
+    });
+    table.on('change', 'input.forceChk', function() {
+      var id = $(this).attr('id');
+      var v  = id.replace('force_','');
+      var checked = $(this).is(':checked');
+      Shiny.setInputValue('force_changed', {var: v, checked: checked, nonce: Math.random()}, {priority: 'event'});
+    });
+  ")
+    ) %>% highlight_sig_rows()   # ← 여기 추가
+    
   })
   
   # Select 체크 변경
@@ -585,7 +607,6 @@ server <- function(input, output, session) {
   output$coef_table <- renderDT({
     df <- coef_table()
     req(!is.null(df), nrow(df) > 0)
-    
     # 헤더명(β/OR/HR) 결정 - metric만 보고 정함
     eff_name <- if ("OR" %in% df$metric) "OR" else if ("HR" %in% df$metric) "HR" else "\u03B2"
     
@@ -594,18 +615,33 @@ server <- function(input, output, session) {
     pfmt <- ifelse(!is.na(pnum) & pnum < 0.001, "<0.001",
                    ifelse(!is.na(pnum), sprintf("%.3f", pnum), as.character(df$p)))
     
-    # 출력용 테이블 (표현만 변경, 계산 없음)
+    # 시그널 플래그 (행 하이라이트용 숨김 컬럼)
+    sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
+    
+    # 출력용 테이블 (+ 숨김 컬럼)
     out <- data.frame(
       Variable = df$term,
       Effect   = signif(df$effect, 4),
       `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
       `p-value` = pfmt,
+      .__sig__  = sig_flag,          # ← 반드시 포함 (숨김용)
       check.names = FALSE,
       stringsAsFactors = FALSE
     )
     names(out)[names(out) == "Effect"] <- eff_name
     
-    datatable(out, options = list(scrollX = TRUE, pageLength = 10), rownames = FALSE)
+    # 숨김 컬럼 인덱스 (0-based)
+    sig_idx <- which(names(out) == ".__sig__") - 1
+    
+    DT::datatable(
+      out,
+      options = list(
+        scrollX = TRUE, pageLength = 10,
+        columnDefs = list(list(visible = FALSE, targets = sig_idx))
+      ),
+      rownames = FALSE
+    ) %>% highlight_sig_rows()   # ← 여기 추가
+    
   })
   
   
