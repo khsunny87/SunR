@@ -12,7 +12,7 @@
 # Interactive Regression Workbench - 완전 주석 버전
 # ---------------------------------------------
 library(dplyr)           # 데이터 처리 (filter, mutate 등)
-
+#source("Sun_forest.R")
 # 패키지 로딩 시 나오는 메시지(예: Masked functions 등)를 숨김
 suppressPackageStartupMessages({
   library(shiny)           # Shiny 웹앱 프레임워크
@@ -55,34 +55,14 @@ ui <- fluidPage(
       hr(),
       
       h4("3) Candidate Covariates"),  # 섹션 제목: 후보 독립변수들
-      helpText("Univariable estimates are shown to help choose covariates for multivariable model."),
-      pickerInput(  # 공변량 선택
-        inputId = "covars",
-        label = "Select covariates (hold Ctrl/Cmd for multi)",
-        choices = NULL,
-        multiple = TRUE,
-        options = list(`live-search` = TRUE, size = 10)
-      ),
-      checkboxGroupInput("force_in", "Force-include variables (always kept)", choices = NULL),  # 항상 포함할 변수 지정
+      #helpText("Selected covariates are listed below. '*' marks force-in."),
+      uiOutput("covariate_list"),
       hr(),
       
-      h4("4) Cleaning"),  # 섹션 제목: 결측값 처리
-      checkboxInput("drop_na", "Complete-case analysis (drop rows with missing in selected vars)", TRUE),
-      verbatimTextOutput("na_info"),  # 결측값 정보 출력
-      hr(),
       
-      h4("5) Stepwise (optional)"),  # 섹션 제목: Stepwise 선택
-      prettyRadioButtons("step_direction", "Direction",  # 방향 선택
-                         choices = c("none", "forward", "backward", "both"),
-                         selected = "none", inline = TRUE),
-      prettyRadioButtons("criterion", "Criterion",       # AIC 또는 BIC 선택
-                         choices = c("AIC", "BIC"), 
-                         selected = "AIC", inline = TRUE),
       
-      hr(),
       
-      actionButton("fit", "Fit Model", class = "btn-primary"),  # 모델 적합 버튼
-      br(), br(),
+      
       actionButton("save_snapshot", "Save Snapshot"),  # 스냅샷 저장 버튼
       textInput("snapshot_label", NULL, placeholder = "Optional label for snapshot"),  # 라벨 붙이기
       downloadButton("download_model", "Download model (.rds)"),  # 모델 저장
@@ -95,16 +75,50 @@ ui <- fluidPage(
         tabPanel("Data",  # 데이터 탭: 업로드/예제 데이터 미리보기
                  h5("Preview"),
                  DTOutput("data_preview")),
-        tabPanel("Univariable screening",  # 단변량 결과 요약 탭
+        tabPanel("Variable selection",  # 단변량 결과 요약 탭
                  helpText("Each candidate covariate is fit in a univariable model with the chosen outcome."),
                  DTOutput("univ_table")),
-        tabPanel("Model result",  # 다변량 모델 결과 탭
-                 h5("Model formula"),
-                 verbatimTextOutput("formula_txt"),
-                 h5("Coefficients"),
-                 DTOutput("coef_table"),
-                 h5("Model diagnostics / notes"),
-                 verbatimTextOutput("model_notes")),
+        tabPanel(
+          "Model result",
+          h4("Cleaning"),
+          checkboxInput(
+            "drop_na",
+            HTML("<span style='white-space: nowrap;'>Complete-case analysis (drop rows with missing in selected vars)</span>"),
+            TRUE
+          ),
+          tableOutput("na_info"),
+          hr(),
+          
+          h4("Stepwise (optional)"),
+          prettyRadioButtons(
+            "step_direction", "Direction",
+            choices = c("none", "forward", "backward", "both"),
+            selected = "none", inline = TRUE
+          ),
+          prettyRadioButtons(
+            "criterion", "Criterion",
+            choices = c("AIC", "BIC"),
+            selected = "AIC", inline = TRUE
+          ),
+          actionButton("fit", "Fit Model", class = "btn-primary"),
+          hr(),
+          
+          h5("Model formula"),
+          verbatimTextOutput("formula_txt"),
+          h5("Coefficients"),
+          DTOutput("coef_table"),
+          h5("Model diagnostics / notes"),
+          verbatimTextOutput("model_notes")
+        ),
+        
+        
+        #tabPanel("Model result",  # 다변량 모델 결과 탭
+        #         h5("Model formula"),
+        #         verbatimTextOutput("formula_txt"),
+        #         h5("Coefficients"),
+        #         DTOutput("coef_table"),
+        #         h5("Model diagnostics / notes"),
+        #         verbatimTextOutput("model_notes")),
         tabPanel("Saved results",  # 저장된 결과 스냅샷 확인
                  DTOutput("snapshots"),
                  downloadButton("download_snapshots", "Download all snapshots (.csv)"))
@@ -118,6 +132,8 @@ ui <- fluidPage(
 # 서버 로직 시작
 # ---------------------
 server <- function(input, output, session) {
+  rv <- reactiveValues(sel = character(0), force = character(0))  # 선택/강제포함 상태 저장
+  
   fit_store <- reactiveVal(NULL)   # 현재 적합된 멀티변수 모델을 보관/초기화용
   
   # ---------------------
@@ -189,12 +205,13 @@ server <- function(input, output, session) {
     # 분석에 필요한 변수 수집
     needed <- character(0)
     if (input$model_type == "cox") {
-      req(input$time_col, input$event_col)  # 둘 다 선택되어야 함
-      needed <- c(input$time_col, input$event_col, input$covars, input$force_in)
+      req(input$time_col, input$event_col)
+      needed <- c(input$time_col, input$event_col, rv$sel, rv$force)
     } else {
-      req(input$outcome)  # outcome 필수
-      needed <- c(input$outcome, input$covars, input$force_in)
+      req(input$outcome)
+      needed <- c(input$outcome, rv$sel, rv$force)
     }
+    
     needed <- unique(needed[needed != ""])  # 공백 제거 및 중복 제거
     
     df2 <- df  # 복사본 만들기
@@ -217,21 +234,43 @@ server <- function(input, output, session) {
   # ---------------------
   # (6) 전처리 전후 비교 정보 출력
   # ---------------------
-  output$na_info <- renderPrint({
-    df <- data_ex()
+  output$na_info <- renderTable({
+    df  <- data_ex()
     df2 <- cleaned_data()
-    list(
-      original_n = nrow(df),      # 원본 데이터 행 수
-      cleaned_n  = nrow(df2),     # 결측 제거 후 행 수
-      dropped    = nrow(df) - nrow(df2)  # 제거된 행 수
+    data.frame(
+      Metric = c("Original N", "Cleaned N", "Dropped"),
+      Value  = c(nrow(df), nrow(df2), nrow(df) - nrow(df2)),
+      check.names = FALSE
     )
-  })
+  },
+  rownames = FALSE,  # 행 이름 숨김
+  align    = "lr"    # 왼쪽정렬/오른쪽정렬
+  )
   
   # ---------------------
   # (7) 데이터 미리보기 탭 출력
   # ---------------------
   output$data_preview <- renderDT({
     datatable(head(data_ex(), 30), options = list(scrollX = TRUE, pageLength = 10))
+  })
+  
+  output$covariate_list <- renderUI({
+    # rv$sel / rv$force는 네가 앞에서 만든 reactiveValues 상태 사용
+    sel <- rv$sel
+    force <- rv$force
+    
+    if (length(sel) == 0) {
+      return(tags$p("No covariates selected yet. Use the checkboxes in the 'Variable selection' table."))
+    }
+    
+    items <- vapply(sel, function(v) {
+      if (v %in% force) paste0(v, " *") else v
+    }, character(1))
+    
+    tagList(
+      tags$ul(lapply(items, function(x) tags$li(x))),
+      tags$p(tags$small("* force-in"))
+    )
   })
   # ---------------------
   # (8) Univariable screening 테이블 계산
@@ -306,55 +345,113 @@ server <- function(input, output, session) {
   # ---------------------
   # (9) Univariable 결과 테이블 출력 (Univariable screening 탭)
   # ---------------------
+  
   output$univ_table <- renderDT({
-    print("🔥 renderDT: univ_table 호출됨")
+    # (1) 유니버스 결과 가져오기
     dt <- univ_tbl()
+    req(!is.null(dt), nrow(dt) > 0)
     
-    if (nrow(dt) == 0 || !all(c("var", "effect", "se", "p", "note") %in% names(dt))) {
-      return(datatable(data.frame()))
-    }
+    # (2) 현재 선택 상태(표시 갱신용 의존성)
+    sel_now   <- rv$sel
+    force_now <- rv$force
     
-    dt_clean <- dt %>%
-      mutate(
-        CI_low  = effect - 1.96 * se,
-        CI_high = effect + 1.96 * se,
-        CI_low  = ifelse(is.na(effect), NA, CI_low),
-        CI_high = ifelse(is.na(effect), NA, CI_high),
-        p_fmt = ifelse(p < 0.001, "<0.001", format(round(p, 3), nsmall = 3))
+    # (3) 표시용 데이터 준비 (원래 통계 컬럼 유지)
+    base <- dt %>% dplyr::select(var, effect, se, p, note)
+    
+    # (4) 체크박스 열 추가 (escape=FALSE로 렌더)
+    base$Select <- vapply(
+      base$var,
+      function(v) as.character(shiny::tags$input(
+        type = "checkbox", class = "selChk",
+        id = paste0("sel_", v),
+        checked = if (v %in% sel_now) "checked" else NULL
+      )),
+      character(1)
+    )
+    
+    base$`Force-in` <- vapply(
+      base$var,
+      function(v) {
+        disabled <- !(v %in% sel_now)  # 선택 안 된 변수 → 비활성
+        as.character(shiny::tags$input(
+          type = "checkbox", class = "forceChk",
+          id = paste0("force_", v),
+          checked  = if (v %in% force_now) "checked" else NULL,
+          disabled = if (disabled) "disabled" else NULL
+        ))
+      },
+      character(1)
+    )
+    
+    # (5) 보기 좋은 형식(원래 너 포맷 유지)
+    out <- base %>%
+      dplyr::mutate(
+        CI_low  = ifelse(is.na(effect), NA, effect - 1.96 * se),
+        CI_high = ifelse(is.na(effect), NA, effect + 1.96 * se),
+        `p-value` = dplyr::case_when(
+          is.na(p) ~ NA_character_,
+          p < 0.001 ~ "<0.001",
+          TRUE ~ sprintf("%.3f", p)
+        )
       ) %>%
-      transmute(
+      dplyr::transmute(
+        Select, `Force-in`,
         Variable = var,
         Effect   = round(effect, 4),
-        `95% CI` = paste0("(", round(CI_low, 4), ", ", round(CI_high, 4), ")"),
-        `p-value` = p_fmt
+        `95% CI` = ifelse(is.na(CI_low), NA_character_,
+                          paste0("(", round(CI_low, 4), ", ", round(CI_high, 4), ")")),
+        `p-value`
       )
     
-    # 모델 타입에 따라 헤더 이름 설정
-    effect_name <- switch(input$model_type,
-                          "linear"   = "β",
-                          "logistic" = "OR",
-                          "cox"      = "HR")
+    # (6) 모델타입에 맞춰 Effect 헤더명 교체 (β / OR / HR)
+    eff_name <- switch(input$model_type, "linear"="β", "logistic"="OR", "cox"="HR")
+    names(out)[names(out) == "Effect"] <- eff_name
     
-    colnames(dt_clean)[which(names(dt_clean) == "Effect")] <- effect_name
-    
-    datatable(dt_clean, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+    DT::datatable(
+      out,
+      escape = FALSE, selection = "none", rownames = FALSE,
+      options = list(scrollX = TRUE, pageLength = 10, ordering = FALSE),
+      callback = DT::JS("
+      table.on('change', 'input.selChk', function() {
+        var id = $(this).attr('id');
+        var v  = id.replace('sel_','');
+        var checked = $(this).is(':checked');
+        Shiny.setInputValue('sel_changed', {var: v, checked: checked, nonce: Math.random()}, {priority: 'event'});
+      });
+      table.on('change', 'input.forceChk', function() {
+        var id = $(this).attr('id');
+        var v  = id.replace('force_','');
+        var checked = $(this).is(':checked');
+        Shiny.setInputValue('force_changed', {var: v, checked: checked, nonce: Math.random()}, {priority: 'event'});
+      });
+    ")
+    )
   })
   
+  # Select 체크 변경
+  observeEvent(input$sel_changed, {
+    v <- input$sel_changed$var
+    if (isTRUE(input$sel_changed$checked)) {
+      rv$sel <- union(rv$sel, v)
+    } else {
+      rv$sel   <- setdiff(rv$sel, v)
+      rv$force <- setdiff(rv$force, v)  # 선택 해제되면 Force-in도 해제
+    }
+  }, ignoreInit = TRUE)
   
-  # ---------------------
-  # (10) covariate 선택 창 업데이트 (결과값 포함된 라벨로 동기화)
-  # ---------------------
- 
+  # Force-in 체크 변경 (선택된 변수에만 반영)
+  observeEvent(input$force_changed, {
+    v <- input$force_changed$var
+    if (!(v %in% rv$sel)) return()  # 선택 안 된 변수면 무시
+    if (isTRUE(input$force_changed$checked)) {
+      rv$force <- union(rv$force, v)
+    } else {
+      rv$force <- setdiff(rv$force, v)
+    }
+  }, ignoreInit = TRUE)
+  
+  
 
-observe({
-  dt <- univ_tbl()
-  choices <- dt$var
-  names(choices) <- choices
-  
-  
-  updatePickerInput(session, "covars", choices = choices, selected = input$covars)
-  updateCheckboxGroupInput(session, "force_in", choices = dt$var, selected = input$force_in)
-})
 
   
   # ---------------------
@@ -362,7 +459,7 @@ observe({
   # ---------------------
   current_formula <- reactive({
     df <- cleaned_data()
-    vars <- unique(c(input$force_in, input$covars))  # 포함된 모든 변수들
+    vars <- unique(c(rv$force, rv$sel))
     
     if (input$model_type == "linear") {
       req(input$outcome)
@@ -439,6 +536,8 @@ observe({
 
   coef_table <- reactive({
     fit <- fit_store()
+    validate(need(!is.null(fit), ""))
+    
     df <- cleaned_data()
     tdy <- broom::tidy(fit, conf.int = TRUE, conf.level = 0.95)
     tdy <- tdy %>% dplyr::filter(term != "(Intercept)")
@@ -515,6 +614,8 @@ observe({
   # ---------------------
   output$model_notes <- renderPrint({
     fit <- fit_store()
+    validate(need(!is.null(fit), "")) 
+    
     if (inherits(fit, "coxph")) {
       # Cox 모델은 proportional hazards 검정
       tryCatch({
@@ -573,27 +674,14 @@ observe({
 
   # 1. 모델 변경 시: choices만 갱신 + 선택값은 초기화
   # 1. 모델 변경 시: choices 갱신 + 선택값 초기화 + 기존 모델 초기화
+
+  # 모델 타입 바뀌면 선택/강제포함/모델 초기화
   observeEvent(input$model_type, {
-    dt <- univ_tbl()
-    
-    # 모델은 무조건 초기화
-    fit_store(NULL)   # ← 기존 멀티변수 모델 삭제
-    
-    # univ_tbl이 비었으면 입력들도 비워주고 종료
-    if (is.null(dt) || nrow(dt) == 0 || !all(c("var","label") %in% names(dt))) {
-      updatePickerInput(session, "covars", choices = character(0), selected = character(0))
-      updateCheckboxGroupInput(session, "force_in", choices = character(0), selected = character(0))
-      return()
-    }
-    
-    choices <- dt$var
-    labels  <- dt$label
-    labels[is.na(labels)] <- choices[is.na(labels)]
-    names(choices) <- labels
-    
-    updatePickerInput(session, "covars", choices = choices, selected = character(0))
-    updateCheckboxGroupInput(session, "force_in", choices = dt$var, selected = character(0))
+    rv$sel   <- character(0)
+    rv$force <- character(0)
+    if (exists("fit_store")) fit_store(NULL)  # 네가 fit_store() 쓰는 경우만 유지. 아니면 이 줄 지워.
   })
+  
   
   # ---------------------
   # (21) Saved results 탭에 Snapshot 테이블 출력
