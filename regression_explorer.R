@@ -26,24 +26,17 @@ suppressPackageStartupMessages({
   library(survival)        # Cox 모델, Surv() 등 생존분석 함수들
 })
 
-# UI 구성 시작
-ui <- fluidPage(
-  titlePanel("Interactive Regression Workbench"),  # 앱 상단 제목
-  
-  sidebarLayout(
-    sidebarPanel(
-      width = 4,  # 사이드바 너비
-      
-      h4("1) Data"),  # 섹션 제목
+
+sidebar<-sidebarPanel(width = 4,  # 사이드바 너비
+  h4("1) Data"),  # 섹션 제목
       fileInput("file", "Upload CSV (utf-8)", accept = c('.csv', 'text/csv', 'text/plain')),  # CSV 업로드
       prettySwitch("use_example", "Use example data", value = TRUE, status = "info"),  # 예제 데이터 사용 여부
       conditionalPanel(
         condition = "input.use_example == true",  # 예제 사용 시 메시지
-        helpText("Examples: mtcars (for linear/logistic), lung (for Cox)")
-      ),
+        helpText("Examples: mtcars (for linear/logistic), lung (for Cox)")),
       hr(),  # 구분선
-      
-      h4("2) Outcome & Model"),  # 섹션 제목: 종속변수 및 모델 종류
+  
+  h4("2) Outcome & Model"),  # 섹션 제목: 종속변수 및 모델 종류
       selectInput("model_type", "Model type",  # 모델 유형 선택
                   choices = c("Linear (Gaussian)" = "linear",
                               "Logistic (Binomial)" = "logistic",
@@ -54,20 +47,22 @@ ui <- fluidPage(
       uiOutput("surv_ui"),     # Cox 모델용 시간/사건 변수 선택 UI
       hr(),
       
-      h4("3) Candidate Covariates"),  # 섹션 제목: 후보 독립변수들
+  h4("3) Candidate Covariates"),  # 섹션 제목: 후보 독립변수들
       #helpText("Selected covariates are listed below. '*' marks force-in."),
       uiOutput("covariate_list"),
       hr(),
       
-      
-      
-      
-      
-      actionButton("save_snapshot", "Save Snapshot"),  # 스냅샷 저장 버튼
+  actionButton("save_snapshot", "Save Snapshot"),  # 스냅샷 저장 버튼
       textInput("snapshot_label", NULL, placeholder = "Optional label for snapshot"),  # 라벨 붙이기
       downloadButton("download_model", "Download model (.rds)"),  # 모델 저장
       downloadButton("download_table", "Download table (.csv)")   # 결과 테이블 저장
-    ),
+  )
+
+# UI 구성 시작
+ui <- fluidPage(
+  titlePanel("Interactive Regression Workbench"),  # 앱 상단 제목
+
+  sidebarLayout(sidebar,
     
     mainPanel(
       width = 8,  # 메인 영역 너비
@@ -318,9 +313,25 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
                     logistic = safe_glm(f, df, family = binomial()),
                     cox      = safe_cox(f, df))
       
+      n_obs <- tryCatch({
+        if (inherits(fit, "coxph")) {
+          # Cox PH 모델: coxph 객체는 사용된 관측치 수를 fit$n에 보관함
+          as.integer(fit$n)
+        } else if (!is.null(fit) && !is.null(fit$model)) {
+          # GLM 등: model 프레임이 들어있음
+          nrow(fit$model)
+        } else if (!is.null(fit) && !is.null(fit$y)) {
+          # 예비 안전장치: y가 있으면 그 길이로
+          NROW(fit$y)
+        } else {
+          NA_integer_
+        }
+      }, error = function(e) NA_integer_)
       if (is.null(fit)) {
         print("❌ 피팅 실패")  # 확인 6
-        return(tibble::tibble(var = v, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
+        #return(tibble::tibble(var = v, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
+        return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
+        
       }
       
       tdy <- tryCatch(broom::tidy(fit), error = function(e) {
@@ -344,7 +355,9 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
       note <- switch(input$model_type, linear = "Beta", logistic = "OR", cox = "HR")
       eff <- if (note %in% c("OR", "HR")) exp(est) else est
       
-      tibble::tibble(var = v, effect = eff, se = se, p = p, note = note)
+      #tibble::tibble(var = v, effect = eff, se = se, p = p, note = note)
+      tibble::tibble(var = v, N = n_obs, effect = eff, se = se, p = p, note = note)
+      
     })
     
     print("✅ lapply 종료. bind_rows 실행")  # 확인 7
@@ -368,7 +381,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     force_now <- rv$force
     
     # (3) 표시용 데이터 준비 (원래 통계 컬럼 유지)
-    base <- dt %>% dplyr::select(var, effect, se, p, note)
+    base <- dt %>% dplyr::select(var, N, effect, se, p, note)
     
     # (4) 체크박스 열 추가 (escape=FALSE로 렌더)
     base$Select <- vapply(
@@ -411,6 +424,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
       dplyr::transmute(
         Select, `Force-in`,
         Variable = var,
+        N        = N,
         Effect   = round(effect, 4),
         `95% CI` = ifelse(is.na(CI_low), NA_character_,
                           paste0("(", round(CI_low, 4), ", ", round(CI_high, 4), ")")),
@@ -530,7 +544,12 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   observeEvent(input$fit, {
     df <- cleaned_data()
     form <- current_formula()
-    
+    no_predictors <- identical(attr(terms(form), "term.labels"), character(0))
+    if (input$model_type == "cox" && no_predictors) {
+      showNotification("Cox PH requires at least one predictor. Select covariates first.", type = "warning")
+      fit_store(NULL)
+      return(invisible(NULL))
+    }
     base_fit <- NULL
     if (input$model_type == "linear") {
       base_fit <- safe_glm(form, df)
@@ -539,16 +558,55 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     } else {
       base_fit <- safe_cox(form, df)
     }
+    # --- ensure stepAIC/update() sees a real data.frame, not a dead local symbol ---
+    df <- as.data.frame(df)
+    if (!is.null(base_fit)) {
+      base_fit$call$data <- df
+    }
+    
     
     validate(need(!is.null(base_fit), "Model failed to fit. Check variables and data."))
     
-    if (input$step_direction != "none") {
+    # --- guard: no predictors (~1) -> skip stepwise ---
+    #no_predictors <- identical(attr(terms(form), "term.labels"), character(0))
+    
+    if (input$step_direction != "none" && !no_predictors) {
+      # ---- force-in 보장: stepAIC scope 설정 ----
+      force_vars <- rv$force
+      all_vars   <- unique(c(rv$force, rv$sel))
+      
+      # LHS 구성
+      lhs <- if (input$model_type == "cox") {
+        paste0("Surv(", input$time_col, ", ", input$event_col, ")")
+      } else {
+        input$outcome
+      }
+      
+      # lower: force-in만(없으면 ~1)
+      lower_rhs <- if (length(force_vars) > 0) paste(force_vars, collapse = "+") else "1"
+      # upper: force-in + 선택변수 전체(없으면 ~1)
+      upper_rhs <- if (length(all_vars) > 0) paste(all_vars, collapse = "+") else "1"
+      
+      lower_form <- as.formula(paste(lhs, "~", lower_rhs))
+      upper_form <- as.formula(paste(lhs, "~", upper_rhs))
+      
       k_val <- if (input$criterion == "AIC") 2 else log(nrow(df))  # BIC: k = log(n)
-      step_fit <- stepAIC(base_fit, direction = input$step_direction, k = k_val, trace = FALSE)
-      fit_store(step_fit)     # ← 저장
+      
+      step_fit <- stepAIC(
+        base_fit,
+        scope     = list(lower = lower_form, upper = upper_form),
+        direction = input$step_direction,
+        k         = k_val,
+        trace     = FALSE
+      )
+      
+      fit_store(step_fit)
     } else {
-      fit_store(base_fit)     # ← 저장
+      fit_store(base_fit)
     }
+    
+    
+    
   })
   
   
@@ -559,6 +617,15 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   coef_table <- reactive({
     fit <- fit_store()
     validate(need(!is.null(fit), ""))
+    n_obs <- tryCatch({
+      if (inherits(fit, "coxph")) {
+        as.integer(fit$n)              # coxph는 fit$n에 N 저장
+      } else if (!is.null(fit)) {
+        as.integer(stats::nobs(fit))   # glm 등은 nobs로 충분
+      } else {
+        NA_integer_
+      }
+    }, error = function(e) NA_integer_)
     
     df <- cleaned_data()
     tdy <- broom::tidy(fit, conf.int = TRUE, conf.level = 0.95)
@@ -592,57 +659,72 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     }
     
     # Format p-values
+    # Format p-values (표시는 문자열, 판정용은 숫자 보존)
     tdy <- tdy %>%
       dplyr::mutate(
-        p = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
+        p_num = p.value,
+        p     = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
       )
     
-    tdy %>% dplyr::select(term, metric, effect, CI_low, CI_high, p)
+    tdy <- tdy %>%
+      dplyr::mutate(N = n_obs) %>%        # N을 모든 행에 부여
+      dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, N)
+    
   })
   
   # ---------------------
   # (15) Coefficients 테이블 UI 출력
   # ---------------------
   # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
-  output$coef_table <- renderDT({
-    df <- coef_table()
-    req(!is.null(df), nrow(df) > 0)
-    # 헤더명(β/OR/HR) 결정 - metric만 보고 정함
-    eff_name <- if ("OR" %in% df$metric) "OR" else if ("HR" %in% df$metric) "HR" else "\u03B2"
-    
-    # p 포맷 통일 (숫자/문자 혼재 방어)
-    pnum <- suppressWarnings(as.numeric(df$p))
-    pfmt <- ifelse(!is.na(pnum) & pnum < 0.001, "<0.001",
-                   ifelse(!is.na(pnum), sprintf("%.3f", pnum), as.character(df$p)))
-    
-    # 시그널 플래그 (행 하이라이트용 숨김 컬럼)
-    sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
-    
-    # 출력용 테이블 (+ 숨김 컬럼)
-    out <- data.frame(
-      Variable = df$term,
-      Effect   = signif(df$effect, 4),
-      `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
-      `p-value` = pfmt,
-      .__sig__  = sig_flag,          # ← 반드시 포함 (숨김용)
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    )
-    names(out)[names(out) == "Effect"] <- eff_name
-    
-    # 숨김 컬럼 인덱스 (0-based)
-    sig_idx <- which(names(out) == ".__sig__") - 1
-    
-    DT::datatable(
-      out,
-      options = list(
-        scrollX = TRUE, pageLength = 10,
-        columnDefs = list(list(visible = FALSE, targets = sig_idx))
-      ),
-      rownames = FALSE
-    ) %>% highlight_sig_rows()   # ← 여기 추가
-    
-  })
+  # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
+  
+
+ # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
+
+output$coef_table <- renderDT({
+  df <- coef_table()
+  req(!is.null(df), nrow(df) > 0)
+
+  # 헤더명(β/OR/HR) 결정 - metric만 보고 정함
+  eff_name <- if ("OR" %in% df$metric) "OR" else if ("HR" %in% df$metric) "HR" else "\u03B2"
+
+  # ✅ 숫자 p값은 df$p_num을 그대로 사용 (문자열 df$p 변환 금지)
+  pnum <- df$p_num
+
+  # 표시용 p값 문자열은 df$p를 기본으로 하되, 숫자일 때는 포맷統一
+  pfmt <- ifelse(!is.na(pnum) & pnum < 0.001, "<0.001",
+                 ifelse(!is.na(pnum), sprintf("%.3f", pnum), as.character(df$p)))
+
+  # ✅ 하이라이트 플래그도 df$p_num 기준
+  sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
+
+  # 출력용 테이블 (+ 숨김 컬럼)
+  out <- data.frame(
+    Variable = df$term,
+    N        = df$N,  # ← 새로 추가된 N 컬럼
+    Effect   = signif(df$effect, 4),
+    `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
+    `p-value` = pfmt,
+    .__sig__  = sig_flag,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  names(out)[names(out) == "Effect"] <- eff_name
+
+  # 숨김 컬럼 인덱스 (0-based)
+  sig_idx <- which(names(out) == ".__sig__") - 1
+
+  DT::datatable(
+    out,
+    options = list(
+      scrollX = TRUE, pageLength = 10,
+      columnDefs = list(list(visible = FALSE, targets = sig_idx))
+    ),
+    rownames = FALSE
+  ) %>% highlight_sig_rows()   # ← 여기 추가
+})
+ 
+
   
   
   # ---------------------
