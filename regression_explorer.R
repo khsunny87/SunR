@@ -58,149 +58,145 @@ sidebar<-sidebarPanel(width = 4,  # 사이드바 너비
       downloadButton("download_table", "Download table (.csv)")   # 결과 테이블 저장
   )
 
+main<-    mainPanel(
+  width = 8,  # 메인 영역 너비
+  tabsetPanel(
+    tabPanel("Data",  # 데이터 탭: 업로드/예제 데이터 미리보기
+             h5("Preview"),
+             DTOutput("data_preview")),
+    tabPanel("Variable selection",  # 단변량 결과 요약 탭
+             helpText("Each candidate covariate is fit in a univariable model with the chosen outcome."),
+             DTOutput("univ_table")),
+    tabPanel("Diagnosis",
+             helpText("Multicollinearity check among currently selected covariates (rv$sel + rv$force)."),
+             DTOutput("vif_table")),
+    tabPanel(
+      "Model result",
+      h4("Model formula"),
+      verbatimTextOutput("formula_txt"),
+      h4("Cleaning"),
+      checkboxInput(
+        "drop_na",
+        HTML("<span style='white-space: nowrap;'>Complete-case analysis (drop rows with missing in selected vars)</span>"),
+        TRUE
+      ),
+      tableOutput("na_info"),
+      hr(),
+      
+      h4("Stepwise (optional)"),
+      prettyRadioButtons(
+        "step_direction", "Direction",
+        choices = c("none", "forward", "backward", "both"),
+        selected = "none", inline = TRUE
+      ),
+      prettyRadioButtons(
+        "criterion", "Criterion",
+        choices = c("AIC", "BIC"),
+        selected = "AIC", inline = TRUE
+      ),
+      actionButton("fit", "Fit Model", class = "btn-primary"),
+      hr(),
+      
+      
+      h5("Coefficients"),
+      DTOutput("coef_table"),
+      h5("Model diagnostics / notes"),
+      verbatimTextOutput("model_notes")
+    ),
+    
+    
+    #tabPanel("Model result",  # 다변량 모델 결과 탭
+    #         h5("Model formula"),
+    #         verbatimTextOutput("formula_txt"),
+    #         h5("Coefficients"),
+    #         DTOutput("coef_table"),
+    #         h5("Model diagnostics / notes"),
+    #         verbatimTextOutput("model_notes")),
+    tabPanel("Saved results",  # 저장된 결과 스냅샷 확인
+             DTOutput("snapshots"),
+             downloadButton("download_snapshots", "Download all snapshots (.csv)"))
+  )
+)
+
 # UI 구성 시작
 ui <- fluidPage(
   titlePanel("Interactive Regression Workbench"),  # 앱 상단 제목
 
-  sidebarLayout(sidebar,
-    
-    mainPanel(
-      width = 8,  # 메인 영역 너비
-      tabsetPanel(
-        tabPanel("Data",  # 데이터 탭: 업로드/예제 데이터 미리보기
-                 h5("Preview"),
-                 DTOutput("data_preview")),
-        tabPanel("Variable selection",  # 단변량 결과 요약 탭
-                 helpText("Each candidate covariate is fit in a univariable model with the chosen outcome."),
-                 DTOutput("univ_table")),
-        tabPanel("Diagnosis",
-                 helpText("Multicollinearity check among currently selected covariates (rv$sel + rv$force)."),
-                 DTOutput("vif_table")),
-        tabPanel(
-          "Model result",
-          h4("Model formula"),
-          verbatimTextOutput("formula_txt"),
-          h4("Cleaning"),
-          checkboxInput(
-            "drop_na",
-            HTML("<span style='white-space: nowrap;'>Complete-case analysis (drop rows with missing in selected vars)</span>"),
-            TRUE
-          ),
-          tableOutput("na_info"),
-          hr(),
-          
-          h4("Stepwise (optional)"),
-          prettyRadioButtons(
-            "step_direction", "Direction",
-            choices = c("none", "forward", "backward", "both"),
-            selected = "none", inline = TRUE
-          ),
-          prettyRadioButtons(
-            "criterion", "Criterion",
-            choices = c("AIC", "BIC"),
-            selected = "AIC", inline = TRUE
-          ),
-          actionButton("fit", "Fit Model", class = "btn-primary"),
-          hr(),
-          
-
-          h5("Coefficients"),
-          DTOutput("coef_table"),
-          h5("Model diagnostics / notes"),
-          verbatimTextOutput("model_notes")
-        ),
-        
-        
-        #tabPanel("Model result",  # 다변량 모델 결과 탭
-        #         h5("Model formula"),
-        #         verbatimTextOutput("formula_txt"),
-        #         h5("Coefficients"),
-        #         DTOutput("coef_table"),
-        #         h5("Model diagnostics / notes"),
-        #         verbatimTextOutput("model_notes")),
-        tabPanel("Saved results",  # 저장된 결과 스냅샷 확인
-                 DTOutput("snapshots"),
-                 downloadButton("download_snapshots", "Download all snapshots (.csv)"))
-      )
-    )
+  sidebarLayout(sidebar,main)
   )
-)
+
 
 
 # ---------------------
 # 서버 로직 시작
 # ---------------------
 server <- function(input, output, session) {
-  
   # ==== INSERT (여기부터 붙여넣기) ====
-  vif_tbl <- reactive({
+  # 선택된 변수들(rv$force + rv$sel)의 "원 변수(term)" 단위 VIF를 계산해 공유
+  # - 범주형은 model.matrix 더미를 'assign'으로 묶어 term별 최대 VIF로 집계
+  vif_shared <- reactive({
     df <- cleaned_data()
     vars <- unique(c(rv$force, rv$sel))
-    # 최소 2개 변수 필요
     if (length(vars) < 2) {
-      return(tibble::tibble(
-        Variable = character(0),
-        VIF = double(0),
-        R2 = double(0),
-        Note = character(0)
-      ))
+      return(tibble::tibble(Variable = character(0), VIF = double(0), R2 = double(0), Note = character(0)))
     }
     
-    # 디자인 매트릭스 생성 (더미 포함), 절편 제거
     form <- as.formula(paste0("~ ", paste(vars, collapse = " + ")))
     X <- tryCatch(model.matrix(form, data = df), error = function(e) NULL)
     if (is.null(X)) {
-      return(tibble::tibble(
-        Variable = character(0),
-        VIF = double(0),
-        R2 = double(0),
-        Note = character(0)
-      ))
-    }
-    if ("(Intercept)" %in% colnames(X)) {
-      X <- X[, colnames(X) != "(Intercept)", drop = FALSE]
+      return(tibble::tibble(Variable = character(0), VIF = double(0), R2 = double(0), Note = character(0)))
     }
     
-    # 상수열(분산 0) 제거 메모
+    # 절편 제거
+    assign_vec <- attr(X, "assign")
+    if (!is.null(assign_vec) && any(assign_vec == 0)) {
+      X <- X[, assign_vec != 0, drop = FALSE]
+      assign_vec <- assign_vec[assign_vec != 0]
+    }
+    
+    # 상수열 제거
     keep <- apply(X, 2, function(col) stats::var(col, na.rm = TRUE) > 0)
-    note_const <- ifelse(keep, "", "constant/removed")
     X <- X[, keep, drop = FALSE]
-    if (ncol(X) < 1) {
-      return(tibble::tibble(
-        Variable = character(0),
-        VIF = double(0),
-        R2 = double(0),
-        Note = character(0)
-      ))
+    assign_vec <- assign_vec[keep]
+    
+    if (ncol(X) < 2) {
+      return(tibble::tibble(Variable = character(0), VIF = double(0), R2 = double(0), Note = character(0)))
     }
     
-    # 각 열에 대해 나머지 열로 회귀 → R2, VIF
-    res <- lapply(seq_len(ncol(X)), function(j) {
-      y <- X[, j]
-      Z <- X[, -j, drop = FALSE]
-      note <- note_const[j]
-      out <- tryCatch({
-        fit <- stats::lm(y ~ Z)
-        r2 <- max(0, min(1, summary(fit)$r.squared))
-        vif <- if (r2 < 1) 1 / (1 - r2) else Inf
-        list(R2 = r2, VIF = vif, Note = note)
-      }, error = function(e) {
-        list(R2 = NA_real_, VIF = NA_real_, Note = paste0("failed: ", e$message))
+    term_labels <- attr(terms(form), "term.labels")
+    present_terms <- sort(unique(assign_vec))
+    if (length(present_terms) < 2) {
+      return(tibble::tibble(Variable = character(0), VIF = double(0), R2 = double(0), Note = character(0)))
+    }
+    
+    rows <- lapply(present_terms, function(k) {
+      cols_k <- which(assign_vec == k)
+      cols_other <- which(assign_vec != k)
+      vifs_k <- sapply(cols_k, function(j) {
+        y <- X[, j]
+        Z <- X[, cols_other, drop = FALSE]
+        r2 <- tryCatch(summary(stats::lm(y ~ Z))$r.squared, error = function(e) NA_real_)
+        if (is.na(r2) || r2 >= 1) Inf else 1 / (1 - r2)
       })
-      data.frame(Variable = colnames(X)[j],
-                 VIF = out$VIF,
-                 R2 = out$R2,
-                 Note = out$Note,
-                 check.names = FALSE,
-                 stringsAsFactors = FALSE)
+      vif_term <- suppressWarnings(max(vifs_k, na.rm = TRUE))
+      if (!is.finite(vif_term)) vif_term <- Inf
+      r2_term <- if (is.finite(vif_term)) max(0, 1 - 1 / vif_term) else 1
+      data.frame(
+        Variable = term_labels[k],
+        VIF = as.numeric(vif_term),
+        R2 = as.numeric(r2_term),
+        Note = "",
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
     })
-    out <- dplyr::bind_rows(res)
-    # 보기 좋게 정렬
-    out <- dplyr::arrange(out, dplyr::desc(VIF))
-    out
+    out <- dplyr::bind_rows(rows)
+    dplyr::arrange(out, dplyr::desc(VIF))
   })
   # ==== INSERT (여기까지) ====
   
+  
+
   
   # --- 공통 스타일 함수: P<0.05 행 하이라이트 ---
 highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
@@ -237,23 +233,19 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   })
 
   # ==== INSERT (여기부터 붙여넣기) ====
+  # (진단 탭) VIF 테이블
   output$vif_table <- DT::renderDT({
-    df <- vif_tbl()
-    # 빈 테이블일 때 메시지
+    # ==== UPDATE (여기부터) ====
+    # 기존: df <- vif_tbl()
+    df <- vif_shared()
+    # ==== UPDATE (여기까지) ====
     validate(need(nrow(df) > 0, "Select at least two covariates to compute VIF."))
-    
-    # 임계값 강조 (예: VIF >= 5 노란색, >= 10 빨간색)
-    dt <- DT::datatable(
-      df,
-      options = list(scrollX = TRUE, pageLength = 10),
-      rownames = FALSE
-    )
-    DT::formatStyle(
-      dt, "VIF",
-      backgroundColor = DT::styleInterval(c(5, 10), c(NA, "khaki", "salmon")),
-      fontWeight = DT::styleInterval(c(5, 10), c("normal", "bold", "bold"))
-    )
+    dt <- DT::datatable(df, options = list(scrollX = TRUE, pageLength = 10), rownames = FALSE)
+    DT::formatStyle(dt, "VIF",
+                    backgroundColor = DT::styleInterval(c(5, 10), c(NA, "khaki", "salmon")),
+                    fontWeight = DT::styleInterval(c(5, 10), c("normal", "bold", "bold")))
   })
+  
   # ==== INSERT (여기까지) ====
   
   
@@ -471,12 +463,15 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     dt <- univ_tbl()
     req(!is.null(dt), nrow(dt) > 0)
     
+    vif_df <- vif_shared() %>% dplyr::select(Variable, VIF)
+    dt <- dt %>% dplyr::left_join(vif_df, by = c("var" = "Variable"))
+    
     # (2) 현재 선택 상태(표시 갱신용 의존성)
     sel_now   <- rv$sel
     force_now <- rv$force
     
     # (3) 표시용 데이터 준비 (원래 통계 컬럼 유지)
-    base <- dt %>% dplyr::select(var, N, effect, se, p, note)
+    base <- dt %>% dplyr::select(var, N, effect, se, p, note, VIF)
     
     # (4) 체크박스 열 추가 (escape=FALSE로 렌더)
     base$Select <- vapply(
@@ -524,6 +519,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
         `95% CI` = ifelse(is.na(CI_low), NA_character_,
                           paste0("(", round(CI_low, 4), ", ", round(CI_high, 4), ")")),
         `p-value`,
+        VIF      = ifelse(is.na(VIF), NA, round(VIF, 3)),
         .__sig__    # ← 반드시 포함 (숨김용)
       )
     
