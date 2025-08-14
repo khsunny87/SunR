@@ -73,6 +73,9 @@ ui <- fluidPage(
         tabPanel("Variable selection",  # 단변량 결과 요약 탭
                  helpText("Each candidate covariate is fit in a univariable model with the chosen outcome."),
                  DTOutput("univ_table")),
+        tabPanel("Diagnosis",
+                 helpText("Multicollinearity check among currently selected covariates (rv$sel + rv$force)."),
+                 DTOutput("vif_table")),
         tabPanel(
           "Model result",
           h4("Model formula"),
@@ -128,6 +131,77 @@ ui <- fluidPage(
 # 서버 로직 시작
 # ---------------------
 server <- function(input, output, session) {
+  
+  # ==== INSERT (여기부터 붙여넣기) ====
+  vif_tbl <- reactive({
+    df <- cleaned_data()
+    vars <- unique(c(rv$force, rv$sel))
+    # 최소 2개 변수 필요
+    if (length(vars) < 2) {
+      return(tibble::tibble(
+        Variable = character(0),
+        VIF = double(0),
+        R2 = double(0),
+        Note = character(0)
+      ))
+    }
+    
+    # 디자인 매트릭스 생성 (더미 포함), 절편 제거
+    form <- as.formula(paste0("~ ", paste(vars, collapse = " + ")))
+    X <- tryCatch(model.matrix(form, data = df), error = function(e) NULL)
+    if (is.null(X)) {
+      return(tibble::tibble(
+        Variable = character(0),
+        VIF = double(0),
+        R2 = double(0),
+        Note = character(0)
+      ))
+    }
+    if ("(Intercept)" %in% colnames(X)) {
+      X <- X[, colnames(X) != "(Intercept)", drop = FALSE]
+    }
+    
+    # 상수열(분산 0) 제거 메모
+    keep <- apply(X, 2, function(col) stats::var(col, na.rm = TRUE) > 0)
+    note_const <- ifelse(keep, "", "constant/removed")
+    X <- X[, keep, drop = FALSE]
+    if (ncol(X) < 1) {
+      return(tibble::tibble(
+        Variable = character(0),
+        VIF = double(0),
+        R2 = double(0),
+        Note = character(0)
+      ))
+    }
+    
+    # 각 열에 대해 나머지 열로 회귀 → R2, VIF
+    res <- lapply(seq_len(ncol(X)), function(j) {
+      y <- X[, j]
+      Z <- X[, -j, drop = FALSE]
+      note <- note_const[j]
+      out <- tryCatch({
+        fit <- stats::lm(y ~ Z)
+        r2 <- max(0, min(1, summary(fit)$r.squared))
+        vif <- if (r2 < 1) 1 / (1 - r2) else Inf
+        list(R2 = r2, VIF = vif, Note = note)
+      }, error = function(e) {
+        list(R2 = NA_real_, VIF = NA_real_, Note = paste0("failed: ", e$message))
+      })
+      data.frame(Variable = colnames(X)[j],
+                 VIF = out$VIF,
+                 R2 = out$R2,
+                 Note = out$Note,
+                 check.names = FALSE,
+                 stringsAsFactors = FALSE)
+    })
+    out <- dplyr::bind_rows(res)
+    # 보기 좋게 정렬
+    out <- dplyr::arrange(out, dplyr::desc(VIF))
+    out
+  })
+  # ==== INSERT (여기까지) ====
+  
+  
   # --- 공통 스타일 함수: P<0.05 행 하이라이트 ---
 highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   DT::formatStyle(
@@ -161,6 +235,27 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
       read_csv(input$file$datapath, show_col_types = FALSE)  # CSV 읽기
     }
   })
+
+  # ==== INSERT (여기부터 붙여넣기) ====
+  output$vif_table <- DT::renderDT({
+    df <- vif_tbl()
+    # 빈 테이블일 때 메시지
+    validate(need(nrow(df) > 0, "Select at least two covariates to compute VIF."))
+    
+    # 임계값 강조 (예: VIF >= 5 노란색, >= 10 빨간색)
+    dt <- DT::datatable(
+      df,
+      options = list(scrollX = TRUE, pageLength = 10),
+      rownames = FALSE
+    )
+    DT::formatStyle(
+      dt, "VIF",
+      backgroundColor = DT::styleInterval(c(5, 10), c(NA, "khaki", "salmon")),
+      fontWeight = DT::styleInterval(c(5, 10), c("normal", "bold", "bold"))
+    )
+  })
+  # ==== INSERT (여기까지) ====
+  
   
   # ---------------------
   # (2) 종속변수 선택 UI 출력 (선형/로지스틱만)
