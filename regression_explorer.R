@@ -706,6 +706,50 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   # ---------------------
   # (14) 회귀 계수 테이블 생성 (conf.int 포함, 변환도 포함)
   # ---------------------
+  vif_final <- reactive({
+    fit <- fit_store()
+    df  <- cleaned_data()
+    if (is.null(fit)) return(tibble::tibble(Variable = character(0), VIF = double(0)))
+    
+    # RHS 설계행렬 생성 (반응변수 제외). coxph/glm 공통적으로 formula(fit) 사용
+    X <- tryCatch(model.matrix(formula(fit), data = df), error = function(e) NULL)
+    if (is.null(X)) return(tibble::tibble(Variable = character(0), VIF = double(0)))
+    
+    # 절편 제거 및 assign 벡터 획득
+    assign_vec <- attr(X, "assign")
+    if (!is.null(assign_vec) && any(assign_vec == 0)) {
+      X <- X[, assign_vec != 0, drop = FALSE]
+      assign_vec <- assign_vec[assign_vec != 0]
+    }
+    
+    # 상수열 제거
+    keep <- apply(X, 2, function(col) stats::var(col, na.rm = TRUE) > 0)
+    X <- X[, keep, drop = FALSE]
+    assign_vec <- assign_vec[keep]
+    
+    if (ncol(X) < 2) return(tibble::tibble(Variable = character(0), VIF = double(0)))
+    
+    term_labels <- attr(terms(formula(fit)), "term.labels")
+    present_terms <- sort(unique(assign_vec))
+    rows <- lapply(present_terms, function(k) {
+      cols_k    <- which(assign_vec == k)
+      cols_rest <- which(assign_vec != k)
+      vifs_k <- sapply(cols_k, function(j) {
+        y <- X[, j]
+        Z <- X[, cols_rest, drop = FALSE]
+        r2 <- tryCatch(summary(stats::lm(y ~ Z))$r.squared, error = function(e) NA_real_)
+        if (is.na(r2) || r2 >= 1) Inf else 1/(1 - r2)
+      })
+      data.frame(
+        Variable = term_labels[k],
+        VIF      = suppressWarnings(max(vifs_k, na.rm = TRUE)),
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
+    })
+    dplyr::bind_rows(rows)
+  })
+  # ==
 
   coef_table <- reactive({
     fit <- fit_store()
@@ -755,13 +799,39 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     # Format p-values (표시는 문자열, 판정용은 숫자 보존)
     tdy <- tdy %>%
       dplyr::mutate(
+        N = n_obs,
         p_num = p.value,
         p     = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
       )
+    out_vif <- tryCatch({
+      X <- model.matrix(formula(fit), data = cleaned_data())
+      assign_vec <- attr(X, "assign")
+      tl <- attr(terms(formula(fit)), "term.labels")
+      # Intercept 제거 정렬
+      if (!is.null(assign_vec) && any(assign_vec == 0)) {
+        # intercept 열 제외
+        keep_cols <- which(assign_vec != 0)
+        X <- X[, keep_cols, drop = FALSE]
+        assign_vec <- assign_vec[keep_cols]
+      }
+      # coef 이름을 열이름과 매칭하여 base term 찾기
+      cn <- colnames(X)
+      idx <- match(tdy$term, cn)
+      base_term <- ifelse(is.na(idx), tdy$term, tl[assign_vec[idx]])
+      vdf <- vif_final()
+      tdy %>%
+        dplyr::mutate(term_base = base_term) %>%
+        dplyr::left_join(vdf, by = c("term_base" = "Variable"))
+    }, error = function(e) {
+      # 매핑 실패 시 VIF는 NA로
+      tdy %>% dplyr::mutate(term_base = term, VIF = NA_real_)
+    })
     
-    tdy <- tdy %>%
-      dplyr::mutate(N = n_obs) %>%        # N을 모든 행에 부여
-      dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, N)
+    out_vif %>% dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, VIF,N)
+    
+
+    
+    
     
   })
   
@@ -798,6 +868,7 @@ output$coef_table <- renderDT({
     Effect   = signif(df$effect, 4),
     `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
     `p-value` = pfmt,
+    VIF      = ifelse(is.null(df$VIF), NA, round(df$VIF, 3)),  # ← 최종모델 term VIF 추가
     .__sig__  = sig_flag,
     check.names = FALSE,
     stringsAsFactors = FALSE
