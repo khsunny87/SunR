@@ -534,7 +534,9 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
       out,
       escape = FALSE, selection = "none", rownames = FALSE,
       options = list(
-        scrollX = TRUE, pageLength = 10, ordering = FALSE,
+        scrollX = TRUE, pageLength = 10, 
+        ordering = TRUE,
+        order=list(),
         columnDefs = list(list(visible = FALSE, targets = sig_idx))
       ),
       callback = DT::JS("
