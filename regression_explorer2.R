@@ -28,35 +28,35 @@ suppressPackageStartupMessages({
 
 
 sidebar<-sidebarPanel(width = 4,  # 사이드바 너비
-  h4("1) Data"),  # 섹션 제목
-      fileInput("file", "Upload CSV (utf-8)", accept = c('.csv', 'text/csv', 'text/plain')),  # CSV 업로드
-      prettySwitch("use_example", "Use example data", value = TRUE, status = "info"),  # 예제 데이터 사용 여부
-      conditionalPanel(
-        condition = "input.use_example == true",  # 예제 사용 시 메시지
-        helpText("Examples: mtcars (for linear/logistic), lung (for Cox)")),
-      hr(),  # 구분선
-  
-  h4("2) Outcome & Model"),  # 섹션 제목: 종속변수 및 모델 종류
-      selectInput("model_type", "Model type",  # 모델 유형 선택
-                  choices = c("Linear (Gaussian)" = "linear",
-                              "Logistic (Binomial)" = "logistic",
-                              "Cox PH (Survival)" = "cox"), 
-                  selected = "linear"),
-      
-      uiOutput("outcome_ui"),  # 선형/로지스틱 회귀용 종속변수 선택 UI
-      uiOutput("surv_ui"),     # Cox 모델용 시간/사건 변수 선택 UI
-      hr(),
-      
-  h4("3) Candidate Covariates"),  # 섹션 제목: 후보 독립변수들
-      #helpText("Selected covariates are listed below. '*' marks force-in."),
-      uiOutput("covariate_list"),
-      hr(),
-      
-  actionButton("save_snapshot", "Save Snapshot"),  # 스냅샷 저장 버튼
-      textInput("snapshot_label", NULL, placeholder = "Optional label for snapshot"),  # 라벨 붙이기
-      downloadButton("download_model", "Download model (.rds)"),  # 모델 저장
-      downloadButton("download_table", "Download table (.csv)")   # 결과 테이블 저장
-  )
+                      h4("1) Data"),  # 섹션 제목
+                      fileInput("file", "Upload CSV (utf-8)", accept = c('.csv', 'text/csv', 'text/plain')),  # CSV 업로드
+                      prettySwitch("use_example", "Use example data", value = TRUE, status = "info"),  # 예제 데이터 사용 여부
+                      conditionalPanel(
+                        condition = "input.use_example == true",  # 예제 사용 시 메시지
+                        helpText("Examples: mtcars (for linear/logistic), lung (for Cox)")),
+                      hr(),  # 구분선
+                      
+                      h4("2) Outcome & Model"),  # 섹션 제목: 종속변수 및 모델 종류
+                      selectInput("model_type", "Model type",  # 모델 유형 선택
+                                  choices = c("Linear (Gaussian)" = "linear",
+                                              "Logistic (Binomial)" = "logistic",
+                                              "Cox PH (Survival)" = "cox"), 
+                                  selected = "linear"),
+                      
+                      uiOutput("outcome_ui"),  # 선형/로지스틱 회귀용 종속변수 선택 UI
+                      uiOutput("surv_ui"),     # Cox 모델용 시간/사건 변수 선택 UI
+                      hr(),
+                      
+                      h4("3) Candidate Covariates"),  # 섹션 제목: 후보 독립변수들
+                      #helpText("Selected covariates are listed below. '*' marks force-in."),
+                      uiOutput("covariate_list"),
+                      hr(),
+                      
+                      actionButton("save_snapshot", "Save Snapshot"),  # 스냅샷 저장 버튼
+                      textInput("snapshot_label", NULL, placeholder = "Optional label for snapshot"),  # 라벨 붙이기
+                      downloadButton("download_model", "Download model (.rds)"),  # 모델 저장
+                      downloadButton("download_table", "Download table (.csv)")   # 결과 테이블 저장
+)
 
 main<-    mainPanel(
   width = 8,  # 메인 영역 너비
@@ -123,9 +123,9 @@ main<-    mainPanel(
 # UI 구성 시작
 ui <- fluidPage(
   titlePanel("Interactive Regression Workbench"),  # 앱 상단 제목
-
+  
   sidebarLayout(sidebar,main)
-  )
+)
 
 
 
@@ -198,19 +198,19 @@ server <- function(input, output, session) {
   # ==== INSERT (여기까지) ====
   
   
-
+  
   
   # --- 공통 스타일 함수: P<0.05 행 하이라이트 ---
-highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
-  DT::formatStyle(
-    dt_widget,
-    sig_col, target = "row",
-    backgroundColor = DT::styleEqual(c("ns","sig"), c(NA, "yellow")),
-    color          = DT::styleEqual(c("ns","sig"), c(NA, "red")),
-    fontWeight     = DT::styleEqual(c("ns","sig"), c("normal", "bold"))
-  )
-}
-
+  highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
+    DT::formatStyle(
+      dt_widget,
+      sig_col, target = "row",
+      backgroundColor = DT::styleEqual(c("ns","sig"), c(NA, "yellow")),
+      color          = DT::styleEqual(c("ns","sig"), c(NA, "red")),
+      fontWeight     = DT::styleEqual(c("ns","sig"), c("normal", "bold"))
+    )
+  }
+  
   rv <- reactiveValues(sel = character(0), force = character(0))  # 선택/강제포함 상태 저장
   
   fit_store <- reactiveVal(NULL)   # 현재 적합된 멀티변수 모델을 보관/초기화용
@@ -233,7 +233,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
       read_csv(input$file$datapath, show_col_types = FALSE)  # CSV 읽기
     }
   })
-
+  
   # ==== INSERT (여기부터 붙여넣기) ====
   # (진단 탭) VIF 테이블
   output$vif_table <- DT::renderDT({
@@ -590,8 +590,8 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   }, ignoreInit = TRUE)
   
   
-
-
+  
+  
   
   # ---------------------
   # (11) 현재 선택된 변수들로 모델 포뮬러 생성
@@ -644,8 +644,8 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   # ---------------------
   # (13) Fit Model 버튼 → 모델 적합 후 fit_store에 저장
   # ---------------------
-
-
+  
+  
   # =========================
   # REPLACE: observeEvent(input$fit, { ... })
   # =========================
@@ -666,7 +666,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
       base_fit <- glm(form, data = df, model = TRUE)
     } else if (input$model_type == "logistic") {
       base_fit <- glm(form, data = df, family = binomial(), model = TRUE)#,
-                      #control = glm.control(maxit = 50))
+      #control = glm.control(maxit = 50))
     } else { # cox
       base_fit <- coxph(form, data = df, model = TRUE)
     }
@@ -779,7 +779,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     tibble::tibble(Variable = colnames(X), VIF = as.numeric(vifs))
   })
   # ==
-
+  
   # =========================
   # REPLACE: coef_table <- reactive({ ... })
   # =========================
@@ -870,59 +870,59 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
   # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
   
-
- # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
-
-output$coef_table <- renderDT({
-  df <- coef_table()
-  req(!is.null(df), nrow(df) > 0)
-
-  # 헤더명(β/OR/HR) 결정 - metric만 보고 정함
-  eff_name <- if ("OR" %in% df$metric) "OR" else if ("HR" %in% df$metric) "HR" else "\u03B2"
-
-  # ✅ 숫자 p값은 df$p_num을 그대로 사용 (문자열 df$p 변환 금지)
-  pnum <- df$p_num
-
-  # 표시용 p값 문자열은 df$p를 기본으로 하되, 숫자일 때는 포맷統一
-  pfmt <- ifelse(!is.na(pnum) & pnum < 0.001, "<0.001",
-                 ifelse(!is.na(pnum), sprintf("%.3f", pnum), as.character(df$p)))
-
-  # ✅ 하이라이트 플래그도 df$p_num 기준
-  sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
-
-  # 출력용 테이블 (+ 숨김 컬럼)
-  n_rows <- nrow(df)
-  N_col   <- if ("N"   %in% names(df)) df$N else rep(NA_integer_, n_rows)
-  VIF_col <- if ("VIF" %in% names(df)) round(df$VIF, 3) else rep(NA_real_,   n_rows)
   
-  out <- data.frame(
-    Variable = df$term,
-    N        = N_col,
-
-    Effect   = signif(df$effect, 4),
-    `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
-    `p-value` = pfmt,
-    VIF      = VIF_col,
-    .__sig__  = sig_flag,
-    check.names = FALSE,
-    stringsAsFactors = FALSE
-  )
-  names(out)[names(out) == "Effect"] <- eff_name
-
-  # 숨김 컬럼 인덱스 (0-based)
-  sig_idx <- which(names(out) == ".__sig__") - 1
-
-  DT::datatable(
-    out,
-    options = list(
-      scrollX = TRUE, pageLength = 10,
-      columnDefs = list(list(visible = FALSE, targets = sig_idx))
-    ),
-    rownames = FALSE
-  ) %>% highlight_sig_rows()   # ← 여기 추가
-})
- 
-
+  # (15) Coefficients 테이블 UI 출력  ← 이 블록만 교체
+  
+  output$coef_table <- renderDT({
+    df <- coef_table()
+    req(!is.null(df), nrow(df) > 0)
+    
+    # 헤더명(β/OR/HR) 결정 - metric만 보고 정함
+    eff_name <- if ("OR" %in% df$metric) "OR" else if ("HR" %in% df$metric) "HR" else "\u03B2"
+    
+    # ✅ 숫자 p값은 df$p_num을 그대로 사용 (문자열 df$p 변환 금지)
+    pnum <- df$p_num
+    
+    # 표시용 p값 문자열은 df$p를 기본으로 하되, 숫자일 때는 포맷統一
+    pfmt <- ifelse(!is.na(pnum) & pnum < 0.001, "<0.001",
+                   ifelse(!is.na(pnum), sprintf("%.3f", pnum), as.character(df$p)))
+    
+    # ✅ 하이라이트 플래그도 df$p_num 기준
+    sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
+    
+    # 출력용 테이블 (+ 숨김 컬럼)
+    n_rows <- nrow(df)
+    N_col   <- if ("N"   %in% names(df)) df$N else rep(NA_integer_, n_rows)
+    VIF_col <- if ("VIF" %in% names(df)) round(df$VIF, 3) else rep(NA_real_,   n_rows)
+    
+    out <- data.frame(
+      Variable = df$term,
+      N        = N_col,
+      
+      Effect   = signif(df$effect, 4),
+      `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
+      `p-value` = pfmt,
+      VIF      = VIF_col,
+      .__sig__  = sig_flag,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+    names(out)[names(out) == "Effect"] <- eff_name
+    
+    # 숨김 컬럼 인덱스 (0-based)
+    sig_idx <- which(names(out) == ".__sig__") - 1
+    
+    DT::datatable(
+      out,
+      options = list(
+        scrollX = TRUE, pageLength = 10,
+        columnDefs = list(list(visible = FALSE, targets = sig_idx))
+      ),
+      rownames = FALSE
+    ) %>% highlight_sig_rows()   # ← 여기 추가
+  })
+  
+  
   
   
   # ---------------------
@@ -987,10 +987,10 @@ output$coef_table <- renderDT({
   # ---------------------
   # (20) Snapshot 저장 버튼 누를 때 현재 결과 저장
   # ---------------------
-
+  
   # 1. 모델 변경 시: choices만 갱신 + 선택값은 초기화
   # 1. 모델 변경 시: choices 갱신 + 선택값 초기화 + 기존 모델 초기화
-
+  
   # 모델 타입 바뀌면 선택/강제포함/모델 초기화
   observeEvent(input$model_type, {
     rv$sel   <- character(0)
