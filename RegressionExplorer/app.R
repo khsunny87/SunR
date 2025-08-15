@@ -281,14 +281,41 @@ server <- function(input, output, session) {
     dplyr::bind_rows(rows) %>% dplyr::arrange(dplyr::desc(VIF))
   })
   
+  # ---- REPLACE: VIF table renderer ----
   output$vif_table <- DT::renderDT({
     df <- vif_shared()
-    validate(need(nrow(df) > 0, "Select at least two covariates to compute VIF."))
-    dt <- DT::datatable(df, options = list(scrollX = TRUE, pageLength = 10), rownames = FALSE)
-    DT::formatStyle(dt, "VIF",
-                    backgroundColor = DT::styleInterval(c(5, 10), c(NA, "khaki", "salmon")),
-                    fontWeight = DT::styleInterval(c(5, 10), c("normal", "bold", "bold")))
+    
+    # 방어: 데이터 프레임이 아니거나 행이 없으면 안내만 보여줌
+    if (is.null(df) || !is.data.frame(df) || nrow(df) < 1) {
+      msg <- data.frame(
+        Message = "Select at least two covariates to compute VIF (rv$sel + rv$force).",
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
+      return(DT::datatable(
+        msg,
+        options = list(dom = 't', paging = FALSE),
+        rownames = FALSE
+      ))
+    }
+    
+    dt <- DT::datatable(
+      df,
+      options = list(scrollX = TRUE, pageLength = 10),
+      rownames = FALSE
+    )
+    
+    DT::formatStyle(
+      dt, "VIF",
+      backgroundColor = DT::styleInterval(c(5, 10), c(NA, "khaki", "salmon")),
+      fontWeight      = DT::styleInterval(c(5, 10), c("normal", "bold", "bold"))
+    )
   })
+  # ---- END REPLACE ----
+  
+  
+  
+  
   
   # --- Univariable screening ---
   univ_tbl <- reactive({
@@ -467,16 +494,28 @@ server <- function(input, output, session) {
     form <- current_formula()
     mod  <- get_model(input$model_type)
     
+    # 예측자 점검(Cox는 최소 1개 필요)
     no_predictors <- identical(attr(terms(form), "term.labels"), character(0))
     if (isTRUE(mod$time_based) && no_predictors) {
       showNotification("Cox PH requires at least one predictor. Select covariates first.", type = "warning")
-      fit_store(NULL); return(invisible(NULL))
+      fit_store(NULL)
+      return(invisible(NULL))
     }
     
-    base_fit <- tryCatch(mod$fit(form, df, input), error = function(e) NULL)
-    validate(need(!is.null(base_fit), "Model failed to fit. Check variables and data."))
+    # === base fit (tryCatch로 감싸고 validate 제거) ===
+    base_fit <- tryCatch(
+      mod$fit(form, df, input),
+      error = function(e) {
+        showNotification(paste0("Model failed to fit: ", e$message), type = "error")
+        NULL
+      }
+    )
+    if (is.null(base_fit)) {
+      fit_store(NULL)
+      return(invisible(NULL))   # << validate(need(...)) 대신 명시적으로 종료
+    }
     
-    # stabilize stepwise data env (compatible with previous workaround)
+    # (이하 그대로 유지)
     df_df <- as.data.frame(df)
     assign(".step_df", df_df, envir = .GlobalEnv)
     on.exit({
@@ -506,7 +545,8 @@ server <- function(input, output, session) {
     environment(upper_form) <- .GlobalEnv
     
     if (input$step_direction == "none" || no_predictors || !isTRUE(mod$supports_step)) {
-      fit_store(base_fit); return(invisible(NULL))
+      fit_store(base_fit)
+      return(invisible(NULL))
     }
     
     step_fit <- tryCatch({
@@ -518,6 +558,8 @@ server <- function(input, output, session) {
     
     fit_store(step_fit %||% base_fit)
   })
+  
+  
   
   # --- Final VIF for fitted model ---
   vif_final <- reactive({
@@ -544,7 +586,7 @@ server <- function(input, output, session) {
   # ---- REPLACE THIS WHOLE coef_table() BLOCK ----
   coef_table <- reactive({
     fit <- fit_store()
-    validate(need(!is.null(fit), ""))  # 모델 없으면 렌더 중단
+    if (is.null(fit)) return(tibble::tibble()) # 모델 없으면 렌더 중단
     
     # 관측치 N
     n_obs <- tryCatch({
@@ -725,18 +767,35 @@ server <- function(input, output, session) {
   })
   
   # --- Diagnostics ---
+  # --- REPLACE THIS WHOLE BLOCK ---
   output$model_notes <- renderPrint({
     fit <- fit_store()
-    validate(need(!is.null(fit), ""))
+    
+    # validate() 대신 안전 가드
+    if (is.null(fit)) {
+      cat("No model fitted yet.")
+      return(invisible())
+    }
     
     if (inherits(fit, "coxph")) {
+      # PH 가정 진단 안전 실행
       tryCatch({
-        ph <- survival::cox.zph(fit); print(ph)
-      }, error = function(e) cat("cox.zph failed:", e$message))
+        ph <- survival::cox.zph(fit)
+        print(ph)
+      }, error = function(e) {
+        cat("cox.zph failed:", e$message)
+      })
     } else {
-      print(summary(fit))
+      # 일반 회귀 요약
+      tryCatch({
+        print(summary(fit))
+      }, error = function(e) {
+        cat("summary failed:", e$message)
+      })
     }
   })
+  # --- END REPLACE ---
+  
   
   # --- Downloads ---
   output$download_table <- downloadHandler(
