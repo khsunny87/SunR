@@ -450,6 +450,8 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     print("✅ lapply 종료. bind_rows 실행")  # 확인 7
     final <- purrr::compact(res) %>% bind_rows()
     print("✅ 최종 테이블 생성 완료")         # 확인 8
+    if (!("N" %in% names(final))) final$N <- NA_integer_
+    
     final
   })
   
@@ -465,6 +467,8 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     
     vif_df <- vif_shared() %>% dplyr::select(Variable, VIF)
     dt <- dt %>% dplyr::left_join(vif_df, by = c("var" = "Variable"))
+    if (!("N"   %in% names(dt)))  dt$N   <- NA_integer_
+    if (!("VIF" %in% names(dt)))  dt$VIF <- NA_real_
     
     # (2) 현재 선택 상태(표시 갱신용 의존성)
     sel_now   <- rv$sel
@@ -711,43 +715,26 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
     df  <- cleaned_data()
     if (is.null(fit)) return(tibble::tibble(Variable = character(0), VIF = double(0)))
     
-    # RHS 설계행렬 생성 (반응변수 제외). coxph/glm 공통적으로 formula(fit) 사용
+    # 최종 모델의 설계행렬(좌변 제외) 생성
     X <- tryCatch(model.matrix(formula(fit), data = df), error = function(e) NULL)
     if (is.null(X)) return(tibble::tibble(Variable = character(0), VIF = double(0)))
     
-    # 절편 제거 및 assign 벡터 획득
-    assign_vec <- attr(X, "assign")
-    if (!is.null(assign_vec) && any(assign_vec == 0)) {
-      X <- X[, assign_vec != 0, drop = FALSE]
-      assign_vec <- assign_vec[assign_vec != 0]
+    # Intercept 제거
+    if ("(Intercept)" %in% colnames(X)) {
+      X <- X[, colnames(X) != "(Intercept)", drop = FALSE]
     }
-    
     # 상수열 제거
     keep <- apply(X, 2, function(col) stats::var(col, na.rm = TRUE) > 0)
     X <- X[, keep, drop = FALSE]
-    assign_vec <- assign_vec[keep]
+    if (ncol(X) < 1) return(tibble::tibble(Variable = character(0), VIF = double(0)))
     
-    if (ncol(X) < 2) return(tibble::tibble(Variable = character(0), VIF = double(0)))
-    
-    term_labels <- attr(terms(formula(fit)), "term.labels")
-    present_terms <- sort(unique(assign_vec))
-    rows <- lapply(present_terms, function(k) {
-      cols_k    <- which(assign_vec == k)
-      cols_rest <- which(assign_vec != k)
-      vifs_k <- sapply(cols_k, function(j) {
-        y <- X[, j]
-        Z <- X[, cols_rest, drop = FALSE]
-        r2 <- tryCatch(summary(stats::lm(y ~ Z))$r.squared, error = function(e) NA_real_)
-        if (is.na(r2) || r2 >= 1) Inf else 1/(1 - r2)
-      })
-      data.frame(
-        Variable = term_labels[k],
-        VIF      = suppressWarnings(max(vifs_k, na.rm = TRUE)),
-        check.names = FALSE,
-        stringsAsFactors = FALSE
-      )
+    vifs <- sapply(seq_len(ncol(X)), function(j) {
+      y <- X[, j]
+      Z <- X[, -j, drop = FALSE]
+      r2 <- tryCatch(summary(stats::lm(y ~ Z))$r.squared, error = function(e) NA_real_)
+      if (is.na(r2) || r2 >= 1) Inf else 1/(1 - r2)
     })
-    dplyr::bind_rows(rows)
+    tibble::tibble(Variable = colnames(X), VIF = as.numeric(vifs))
   })
   # ==
 
@@ -803,30 +790,26 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
         p_num = p.value,
         p     = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
       )
-    out_vif <- tryCatch({
-      X <- model.matrix(formula(fit), data = cleaned_data())
-      assign_vec <- attr(X, "assign")
-      tl <- attr(terms(formula(fit)), "term.labels")
-      # Intercept 제거 정렬
-      if (!is.null(assign_vec) && any(assign_vec == 0)) {
-        # intercept 열 제외
-        keep_cols <- which(assign_vec != 0)
-        X <- X[, keep_cols, drop = FALSE]
-        assign_vec <- assign_vec[keep_cols]
+    vdf <- vif_final()  # Variable(=열명), VIF
+    # 일부 모델에서 tidy(term)와 열명이 약간 다를 수 있어 안전장치:
+    # 1) 기본: 직접 매칭
+    out_vif <- tdy %>% dplyr::left_join(vdf, by = c("term" = "Variable"))
+    # 2) 매칭 실패(NA)가 많으면, 설계행렬을 만들어 근접 매칭 시도 (선택적 방어)
+    if (any(is.na(out_vif$VIF))) {
+      X <- tryCatch(model.matrix(formula(fit), data = cleaned_data()), error = function(e) NULL)
+      if (!is.null(X)) {
+        cn <- colnames(X)
+        # tidy term이 열명에 정확히 포함되면 그 열로 매칭 (가벼운 휴리스틱)
+        guess <- vapply(out_vif$term, function(tt) {
+          hit <- which(cn == tt)
+          if (length(hit) == 1) cn[hit] else NA_character_
+        }, character(1))
+        out_vif$term_col <- ifelse(is.na(guess), out_vif$term, guess)
+        out_vif <- out_vif %>% dplyr::left_join(vdf, by = c("term_col" = "Variable"), suffix = c("", ".v2"))
+        out_vif$VIF <- ifelse(is.na(out_vif$VIF), out_vif$VIF.v2, out_vif$VIF)
+        out_vif$VIF.v2 <- NULL
       }
-      # coef 이름을 열이름과 매칭하여 base term 찾기
-      cn <- colnames(X)
-      idx <- match(tdy$term, cn)
-      base_term <- ifelse(is.na(idx), tdy$term, tl[assign_vec[idx]])
-      vdf <- vif_final()
-      tdy %>%
-        dplyr::mutate(term_base = base_term) %>%
-        dplyr::left_join(vdf, by = c("term_base" = "Variable"))
-    }, error = function(e) {
-      # 매핑 실패 시 VIF는 NA로
-      tdy %>% dplyr::mutate(term_base = term, VIF = NA_real_)
-    })
-    
+    }
     out_vif %>% dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, VIF,N)
     
 
@@ -862,13 +845,18 @@ output$coef_table <- renderDT({
   sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
 
   # 출력용 테이블 (+ 숨김 컬럼)
+  n_rows <- nrow(df)
+  N_col   <- if ("N"   %in% names(df)) df$N else rep(NA_integer_, n_rows)
+  VIF_col <- if ("VIF" %in% names(df)) round(df$VIF, 3) else rep(NA_real_,   n_rows)
+  
   out <- data.frame(
     Variable = df$term,
-    N        = df$N,  # ← 새로 추가된 N 컬럼
+    N        = N_col,
+
     Effect   = signif(df$effect, 4),
     `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
     `p-value` = pfmt,
-    VIF      = ifelse(is.null(df$VIF), NA, round(df$VIF, 3)),  # ← 최종모델 term VIF 추가
+    VIF      = VIF_col,
     .__sig__  = sig_flag,
     check.names = FALSE,
     stringsAsFactors = FALSE
