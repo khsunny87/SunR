@@ -638,73 +638,109 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   # ---------------------
   # (13) Fit Model 버튼 → 모델 적합 후 fit_store에 저장
   # ---------------------
+
+
+  # =========================
+  # REPLACE: observeEvent(input$fit, { ... })
+  # =========================
   observeEvent(input$fit, {
-    df <- cleaned_data()
+    df   <- cleaned_data()
     form <- current_formula()
+    
     no_predictors <- identical(attr(terms(form), "term.labels"), character(0))
     if (input$model_type == "cox" && no_predictors) {
       showNotification("Cox PH requires at least one predictor. Select covariates first.", type = "warning")
       fit_store(NULL)
       return(invisible(NULL))
     }
+    
+    # --- base fit (model=TRUE 권장) ---
     base_fit <- NULL
     if (input$model_type == "linear") {
-      base_fit <- safe_glm(form, df)
+      base_fit <- glm(form, data = df, model = TRUE)
     } else if (input$model_type == "logistic") {
-      base_fit <- safe_glm(form, df, family = binomial())
-    } else {
-      base_fit <- safe_cox(form, df)
+      base_fit <- glm(form, data = df, family = binomial(), model = TRUE)#,
+                      #control = glm.control(maxit = 50))
+    } else { # cox
+      base_fit <- coxph(form, data = df, model = TRUE)
     }
-    # --- ensure stepAIC/update() sees a real data.frame, not a dead local symbol ---
-    df <- as.data.frame(df)
-    if (!is.null(base_fit)) {
-      base_fit$call$data <- df
-    }
-    
-    
     validate(need(!is.null(base_fit), "Model failed to fit. Check variables and data."))
     
-    # --- guard: no predictors (~1) -> skip stepwise ---
-    #no_predictors <- identical(attr(terms(form), "term.labels"), character(0))
-    
-    if (input$step_direction != "none" && !no_predictors) {
-      # ---- force-in 보장: stepAIC scope 설정 ----
-      force_vars <- rv$force
-      all_vars   <- unique(c(rv$force, rv$sel))
-      
-      # LHS 구성
-      lhs <- if (input$model_type == "cox") {
-        paste0("Surv(", input$time_col, ", ", input$event_col, ")")
-      } else {
-        input$outcome
+    # --- 핵심: .GlobalEnv에 .step_df 심볼 등록 (끝나면 삭제) ---
+    df <- as.data.frame(df)
+    assign(".step_df", df, envir = .GlobalEnv)
+    on.exit({
+      if (exists(".step_df", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".step_df", envir = .GlobalEnv)
       }
-      
-      # lower: force-in만(없으면 ~1)
-      lower_rhs <- if (length(force_vars) > 0) paste(force_vars, collapse = "+") else "1"
-      # upper: force-in + 선택변수 전체(없으면 ~1)
-      upper_rhs <- if (length(all_vars) > 0) paste(all_vars, collapse = "+") else "1"
-      
-      lower_form <- as.formula(paste(lhs, "~", lower_rhs))
-      upper_form <- as.formula(paste(lhs, "~", upper_rhs))
-      
-      k_val <- if (input$criterion == "AIC") 2 else log(nrow(df))  # BIC: k = log(n)
-      
-      step_fit <- stepAIC(
-        base_fit,
-        scope     = list(lower = lower_form, upper = upper_form),
-        direction = input$step_direction,
-        k         = k_val,
-        trace     = FALSE
-      )
-      
-      fit_store(step_fit)
-    } else {
+    }, add = TRUE)
+    
+    # base_fit 이 항상 .step_df를 보게 고정
+    base_fit$call$data <- as.name(".step_df")
+    # 포뮬러 환경 고정 (setter 없음 → 포뮬러 꺼내서 주입 후 call에 되박기)
+    f <- formula(base_fit)
+    environment(f) <- .GlobalEnv
+    base_fit$call$formula <- f
+    if (!is.null(base_fit$terms)) attr(base_fit$terms, ".Environment") <- .GlobalEnv
+    
+    # stepwise 없으면 종료
+    if (input$step_direction == "none" || no_predictors) {
       fit_store(base_fit)
+      return(invisible(NULL))
     }
     
+    # scope(lower/upper)
+    force_vars <- rv$force
+    all_vars   <- unique(c(rv$force, rv$sel))
+    k_val      <- if (input$criterion == "AIC") 2 else log(nrow(df))
     
+    if (input$model_type == "cox") {
+      lhs <- paste0("Surv(", input$time_col, ", ", input$event_col, ")")
+      lower_form <- if (length(force_vars) > 0) {
+        as.formula(paste(lhs, "~", paste(force_vars, collapse = " + ")))
+      } else as.formula(paste(lhs, "~ 1"))
+      upper_form <- if (length(all_vars) > 0) {
+        as.formula(paste(lhs, "~", paste(all_vars, collapse = " + ")))
+      } else as.formula(paste(lhs, "~ 1"))
+    } else {
+      lhs <- input$outcome
+      lower_form <- if (length(force_vars) > 0) reformulate(force_vars, response = lhs) else as.formula(paste(lhs, "~ 1"))
+      upper_form <- if (length(all_vars)  > 0) reformulate(all_vars,  response = lhs) else as.formula(paste(lhs, "~ 1"))
+    }
+    # scope 폼들도 글로벌에서 평가되게
+    environment(lower_form) <- .GlobalEnv
+    environment(upper_form) <- .GlobalEnv
     
+    # --- 로지스틱은 stats::step(견고), 나머지는 stepAIC ---
+    step_fit <- tryCatch({
+      if (input$model_type == "logistic") {
+        stats::step(
+          base_fit,
+          scope     = list(lower = lower_form, upper = upper_form),
+          direction = input$step_direction,
+          k         = k_val,
+          trace     = 0
+        )
+      } else {
+        MASS::stepAIC(
+          base_fit,
+          scope     = list(lower = lower_form, upper = upper_form),
+          direction = input$step_direction,
+          k         = k_val,
+          trace     = FALSE
+        )
+      }
+    }, error = function(e) {
+      showNotification(paste("Stepwise selection 실패:", e$message), type = "error")
+      NULL
+    })
+    
+    fit_store(step_fit)
   })
+  # =========================
+  # END REPLACE
+  # =========================
+  
   
   
   # ---------------------
@@ -738,71 +774,74 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
   })
   # ==
 
+  # =========================
+  # REPLACE: coef_table <- reactive({ ... })
+  # =========================
   coef_table <- reactive({
     fit <- fit_store()
     validate(need(!is.null(fit), ""))
+    
+    # 관측치 N
     n_obs <- tryCatch({
       if (inherits(fit, "coxph")) {
-        as.integer(fit$n)              # coxph는 fit$n에 N 저장
+        as.integer(fit$n)
       } else if (!is.null(fit)) {
-        as.integer(stats::nobs(fit))   # glm 등은 nobs로 충분
-      } else {
-        NA_integer_
-      }
+        as.integer(stats::nobs(fit))
+      } else NA_integer_
     }, error = function(e) NA_integer_)
     
-    df <- cleaned_data()
-    tdy <- broom::tidy(fit, conf.int = TRUE, conf.level = 0.95)
+    # 1) tidy는 conf.int=FALSE로만 (프로파일 CI 비활성화)
+    tdy <- broom::tidy(fit, conf.int = FALSE)
     tdy <- tdy %>% dplyr::filter(term != "(Intercept)")
     
-    # Metric-specific transformation
+    # 2) Wald CI 직접 계산 (estimate ± 1.96*SE)
     if (inherits(fit, "coxph")) {
       tdy <- tdy %>%
         dplyr::mutate(
           metric = "HR",
           effect = exp(estimate),
-          CI_low = exp(conf.low),
-          CI_high = exp(conf.high)
+          CI_low = exp(estimate - 1.96 * std.error),
+          CI_high = exp(estimate + 1.96 * std.error)
         )
-    } else if (!is.null(family(fit)) && family(fit)$family == "binomial") {
+    } else if (!is.null(stats::family(fit)) && stats::family(fit)$family == "binomial") {
       tdy <- tdy %>%
         dplyr::mutate(
           metric = "OR",
           effect = exp(estimate),
-          CI_low = exp(conf.low),
-          CI_high = exp(conf.high)
+          CI_low = exp(estimate - 1.96 * std.error),
+          CI_high = exp(estimate + 1.96 * std.error)
         )
     } else {
       tdy <- tdy %>%
         dplyr::mutate(
           metric = "Beta",
           effect = estimate,
-          CI_low = conf.low,
-          CI_high = conf.high
+          CI_low = estimate - 1.96 * std.error,
+          CI_high = estimate + 1.96 * std.error
         )
     }
     
-    # Format p-values
-    # Format p-values (표시는 문자열, 판정용은 숫자 보존)
+    # p-value 포맷 (숫자/문자 분리 보존)
     tdy <- tdy %>%
       dplyr::mutate(
-        N = n_obs,
+        N     = n_obs,
         p_num = p.value,
-        p     = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
+        p     = dplyr::case_when(
+          is.na(p.value) ~ NA_character_,
+          p.value < 0.001 ~ "<0.001",
+          TRUE ~ sprintf("%.3f", p.value)
+        )
       )
-    vdf <- vif_final()  # Variable(=열명), VIF
-    # 일부 모델에서 tidy(term)와 열명이 약간 다를 수 있어 안전장치:
-    # 1) 기본: 직접 매칭
+    
+    # VIF 결합 (가능하면 매칭)
+    vdf <- vif_final()
     out_vif <- tdy %>% dplyr::left_join(vdf, by = c("term" = "Variable"))
-    # 2) 매칭 실패(NA)가 많으면, 설계행렬을 만들어 근접 매칭 시도 (선택적 방어)
     if (any(is.na(out_vif$VIF))) {
       X <- tryCatch(model.matrix(formula(fit), data = cleaned_data()), error = function(e) NULL)
       if (!is.null(X)) {
         cn <- colnames(X)
-        # tidy term이 열명에 정확히 포함되면 그 열로 매칭 (가벼운 휴리스틱)
         guess <- vapply(out_vif$term, function(tt) {
-          hit <- which(cn == tt)
-          if (length(hit) == 1) cn[hit] else NA_character_
+          hit <- which(cn == tt); if (length(hit) == 1) cn[hit] else NA_character_
         }, character(1))
         out_vif$term_col <- ifelse(is.na(guess), out_vif$term, guess)
         out_vif <- out_vif %>% dplyr::left_join(vdf, by = c("term_col" = "Variable"), suffix = c("", ".v2"))
@@ -810,13 +849,14 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
         out_vif$VIF.v2 <- NULL
       }
     }
-    out_vif %>% dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, VIF,N)
     
-
-    
-    
-    
+    out_vif %>% dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, VIF, N)
   })
+  # =========================
+  # END REPLACE
+  # =========================
+  
+  
   
   # ---------------------
   # (15) Coefficients 테이블 UI 출력
