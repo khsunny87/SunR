@@ -540,73 +540,150 @@ server <- function(input, output, session) {
   })
   
   # --- Coef table ---
+
+  # ---- REPLACE THIS WHOLE coef_table() BLOCK ----
   coef_table <- reactive({
     fit <- fit_store()
-    validate(need(!is.null(fit), ""))
+    validate(need(!is.null(fit), ""))  # 모델 없으면 렌더 중단
     
+    # 관측치 N
     n_obs <- tryCatch({
       if (inherits(fit, "coxph")) as.integer(fit$n)
-      else if (!is.null(fit)) as.integer(stats::nobs(fit))
+      else if (!is.null(fit))     as.integer(stats::nobs(fit))
       else NA_integer_
     }, error = function(e) NA_integer_)
     
-    tdy <- broom::tidy(fit, conf.int = FALSE) %>% dplyr::filter(term != "(Intercept)")
+    # tidy 안전 호출
+    tdy <- tryCatch({
+      broom::tidy(fit, conf.int = FALSE)
+    }, error = function(e) NULL)
     
-    if (inherits(fit, "coxph")) {
-      tdy <- tdy %>%
-        dplyr::mutate(
-          metric = "HR",
-          effect = exp(estimate),
-          CI_low = exp(estimate - 1.96 * std.error),
-          CI_high = exp(estimate + 1.96 * std.error)
-        )
-    } else if (!is.null(stats::family(fit)) && stats::family(fit)$family == "binomial") {
-      tdy <- tdy %>%
-        dplyr::mutate(
-          metric = "OR",
-          effect = exp(estimate),
-          CI_low = exp(estimate - 1.96 * std.error),
-          CI_high = exp(estimate + 1.96 * std.error)
-        )
-    } else {
-      tdy <- tdy %>%
-        dplyr::mutate(
-          metric = "Beta",
-          effect = estimate,
-          CI_low = estimate - 1.96 * std.error,
-          CI_high = estimate + 1.96 * std.error
-        )
+    # tidy 실패/NULL → 빈 테이블
+    if (is.null(tdy)) {
+      return(tibble::tibble(term=character(), metric=character(), effect=double(),
+                            CI_low=double(), CI_high=double(), p_num=double(),
+                            p=character(), VIF=double(), N=integer()))
     }
     
-    tdy <- tdy %>%
-      dplyr::mutate(
-        N     = n_obs,
-        p_num = p.value,
-        p     = dplyr::case_when(
-          is.na(p.value) ~ NA_character_,
-          p.value < 0.001 ~ "<0.001",
-          TRUE ~ sprintf("%.3f", p.value)
-        )
-      )
+    # term 컬럼 없으면 빈 테이블 반환
+    if (!("term" %in% names(tdy))) {
+      return(tibble::tibble(term=character(), metric=character(), effect=double(),
+                            CI_low=double(), CI_high=double(), p_num=double(),
+                            p=character(), VIF=double(), N=integer()))
+    }
     
+    # 절편 제거 (base R 서브셋; dplyr NSE 회피)
+    tdy <- tdy[tdy$term != "(Intercept)", , drop = FALSE]
+    
+    # 절편만 있거나 0행이면 빈 테이블 반환
+    if (nrow(tdy) == 0) {
+      return(tibble::tibble(term=character(), metric=character(), effect=double(),
+                            CI_low=double(), CI_high=double(), p_num=double(),
+                            p=character(), VIF=double(), N=integer()))
+    }
+    
+    # 안전: 누락 컬럼 NA 채움
+    if (!("estimate"  %in% names(tdy))) tdy$estimate  <- NA_real_
+    if (!("std.error" %in% names(tdy))) tdy$std.error <- NA_real_
+    if (!("p.value"   %in% names(tdy))) tdy$p.value   <- NA_real_
+    
+    # 효과/CI 계산
+    if (inherits(fit, "coxph")) {
+      metric <- "HR"
+      effect <- exp(tdy$estimate)
+      CI_low <- exp(tdy$estimate - 1.96 * tdy$std.error)
+      CI_high<- exp(tdy$estimate + 1.96 * tdy$std.error)
+    } else if (!is.null(stats::family(fit)) && stats::family(fit)$family == "binomial") {
+      metric <- "OR"
+      effect <- exp(tdy$estimate)
+      CI_low <- exp(tdy$estimate - 1.96 * tdy$std.error)
+      CI_high<- exp(tdy$estimate + 1.96 * tdy$std.error)
+    } else {
+      metric <- "Beta"
+      effect <- tdy$estimate
+      CI_low <- tdy$estimate - 1.96 * tdy$std.error
+      CI_high<- tdy$estimate + 1.96 * tdy$std.error
+    }
+    
+    # 표시용 p
+    pnum <- tdy$p.value
+    pfmt <- ifelse(is.na(pnum), NA_character_,
+                   ifelse(pnum < 0.001, "<0.001", sprintf("%.3f", pnum)))
+    
+    # VIF 매칭
     vdf <- vif_final()
-    out_vif <- tdy %>% dplyr::left_join(vdf, by = c("term" = "Variable"))
+    out_vif <- dplyr::left_join(
+      tibble::tibble(term = tdy$term, metric = metric, effect = effect,
+                     CI_low = CI_low, CI_high = CI_high,
+                     p_num = pnum, p = pfmt),
+      vdf, by = c("term" = "Variable")
+    )
+    
+    # 남은 NA VIF는 설계행렬 컬럼명으로 재시도
     if (any(is.na(out_vif$VIF))) {
-      X <- tryCatch(model.matrix(formula(fit), data = cleaned_data()), error = function(e) NULL)
+      X <- tryCatch(stats::model.matrix(stats::formula(fit), data = cleaned_data()), error = function(e) NULL)
       if (!is.null(X)) {
         cn <- colnames(X)
         guess <- vapply(out_vif$term, function(tt) {
           hit <- which(cn == tt); if (length(hit) == 1) cn[hit] else NA_character_
         }, character(1))
         out_vif$term_col <- ifelse(is.na(guess), out_vif$term, guess)
-        out_vif <- out_vif %>% dplyr::left_join(vdf, by = c("term_col" = "Variable"), suffix = c("", ".v2"))
+        out_vif <- dplyr::left_join(out_vif, vdf, by = c("term_col" = "Variable"), suffix = c("", ".v2"))
         out_vif$VIF <- ifelse(is.na(out_vif$VIF), out_vif$VIF.v2, out_vif$VIF)
         out_vif$VIF.v2 <- NULL
       }
     }
     
-    out_vif %>% dplyr::select(term, metric, effect, CI_low, CI_high, p_num, p, VIF, N)
+    out_vif$N <- n_obs
+    out_vif
   })
+  # ---- END REPLACEMENT ----
+  
+  # ---- OPTIONAL: renderDT도 빈 데이터 대응을 좀 더 명확히 ----
+  output$coef_table <- renderDT({
+    df <- coef_table()
+    if (is.null(df) || nrow(df) == 0) {
+      return(DT::datatable(
+        data.frame(Message = "No coefficients to display (model has no predictors or failed)."),
+        options = list(dom = 't'), rownames = FALSE
+      ))
+    }
+    
+    eff_name <- if ("OR" %in% df$metric) "OR" else if ("HR" %in% df$metric) "HR" else "\u03B2"
+    pnum <- df$p_num
+    pfmt <- ifelse(!is.na(pnum) & pnum < 0.001, "<0.001",
+                   ifelse(!is.na(pnum), sprintf("%.3f", pnum), as.character(df$p)))
+    sig_flag <- ifelse(!is.na(pnum) & pnum < 0.05, "sig", "ns")
+    
+    n_rows <- nrow(df)
+    N_col   <- if ("N"   %in% names(df)) df$N else rep(NA_integer_, n_rows)
+    VIF_col <- if ("VIF" %in% names(df)) round(df$VIF, 3) else rep(NA_real_,   n_rows)
+    
+    out <- data.frame(
+      Variable = df$term,
+      N        = N_col,
+      Effect   = signif(df$effect, 4),
+      `95% CI` = paste0("(", signif(df$CI_low, 4), ", ", signif(df$CI_high, 4), ")"),
+      `p-value` = pfmt,
+      VIF      = VIF_col,
+      .__sig__  = sig_flag,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+    names(out)[names(out) == "Effect"] <- eff_name
+    
+    sig_idx <- which(names(out) == ".__sig__") - 1
+    
+    DT::datatable(
+      out,
+      options = list(
+        scrollX = TRUE, pageLength = 10,
+        columnDefs = list(list(visible = FALSE, targets = sig_idx))
+      ),
+      rownames = FALSE
+    ) %>% highlight_sig_rows()
+  })
+  
   
   output$coef_table <- renderDT({
     df <- coef_table()

@@ -3,7 +3,8 @@
 .build_formula <- function(input, rv) {
   lhs  <- input$outcome
   vars <- unique(c(rv$force, rv$sel))
-  if (length(vars) == 0) as.formula(paste0(lhs, " ~ 1")) else reformulate(vars, response = lhs)
+  if (length(vars) == 0) stats::as.formula(paste0(lhs, " ~ 1"))
+  else stats::reformulate(vars, response = lhs)
 }
 
 .fit <- function(formula, data, input) {

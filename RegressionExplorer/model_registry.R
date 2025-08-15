@@ -6,7 +6,7 @@ suppressPackageStartupMessages({
   library(rlang)
 })
 
-ModelRegistry <- new.env(parent = baseenv())
+ModelRegistry <- new.env(parent = globalenv())
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 

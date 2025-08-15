@@ -6,8 +6,8 @@
 .build_formula <- function(input, rv) {
   lhs  <- paste0("Surv(", input$time_col, ", ", input$event_col, ")")
   vars <- unique(c(rv$force, rv$sel))
-  if (length(vars) == 0) as.formula(paste0(lhs, " ~ 1"))
-  else as.formula(paste0(lhs, " ~ ", paste(vars, collapse = " + ")))
+  if (length(vars) == 0) stats::as.formula(paste0(lhs, " ~ 1"))
+  else stats::as.formula(paste0(lhs, " ~ ", paste(vars, collapse = " + ")))
 }
 
 .fit <- function(formula, data, input) {
