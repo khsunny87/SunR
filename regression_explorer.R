@@ -674,7 +674,7 @@ highlight_sig_rows <- function(dt_widget, sig_col = ".__sig__") {
         rm(".step_df", envir = .GlobalEnv)
       }
     }, add = TRUE)
-    
+    #
     # base_fit 이 항상 .step_df를 보게 고정
     base_fit$call$data <- as.name(".step_df")
     # 포뮬러 환경 고정 (setter 없음 → 포뮬러 꺼내서 주입 후 call에 되박기)
