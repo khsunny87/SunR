@@ -137,7 +137,8 @@ server <- function(input, output, session) {
   # --- Example or Uploaded Data ---
   data_ex <- reactive({
     if (isTRUE(input$use_example)) {
-      if (identical(input$model_type, "cox")) {
+      mod <- get_model(input$model_type)
+      if (isTRUE(mod$time_based)) {
         lung %>% dplyr::mutate(status = ifelse(status == 2, 1, 0))
       } else {
         mtcars %>% dplyr::mutate(across(where(is.numeric), as.numeric))
@@ -151,14 +152,15 @@ server <- function(input, output, session) {
   # --- Outcome / Survival UI from model meta ---
   output$outcome_ui <- renderUI({
     mod <- get_model(input$model_type)
-    if (isTRUE(mod$time_based)) return(NULL)
+    if (isTRUE(mod$time_based)) return(NULL)  # 시간기반 모델이면 outcome 직접 선택 UI 숨김
     df <- data_ex()
     selectInput("outcome", "Outcome variable", choices = names(df))
   })
   
+  
   output$surv_ui <- renderUI({
     mod <- get_model(input$model_type)
-    if (!isTRUE(mod$time_based)) return(NULL)
+    if (!isTRUE(mod$time_based)) return(NULL)  # 시간기반 모델일 때만 노출
     df <- data_ex(); cols <- names(df)
     tagList(
       selectInput("time_col",  "Survival time column", choices = cols),
@@ -166,6 +168,7 @@ server <- function(input, output, session) {
       checkboxInput("nonzero_event", "Treat non-zero as event (coerce to 0/1)", TRUE)
     )
   })
+  
   
   # --- Safe wrappers ---
   safe_glm <- function(form, data, family = NULL) {
@@ -181,7 +184,9 @@ server <- function(input, output, session) {
   cleaned_data <- reactive({
     df <- data_ex()
     needed <- character(0)
-    if (identical(input$model_type, "cox")) {
+    mod <- get_model(input$model_type)
+    
+    if (isTRUE(mod$time_based)) {
       req(input$time_col, input$event_col)
       needed <- c(input$time_col, input$event_col, rv$sel, rv$force)
     } else {
@@ -319,24 +324,41 @@ server <- function(input, output, session) {
   
   # --- Univariable screening ---
   univ_tbl <- reactive({
-    df <- cleaned_data()
-    if (identical(input$model_type, "cox")) {
-      drop_cols <- c(input$time_col, input$event_col)
-    } else {
-      drop_cols <- input$outcome
-    }
+    df  <- cleaned_data()
+    mod <- get_model(input$model_type)
+    
+    # 제외할 컬럼: time_based면 time/event, 아니면 outcome
+    drop_cols <- if (isTRUE(mod$time_based)) c(input$time_col, input$event_col) else input$outcome
     cand <- setdiff(names(df), drop_cols)
     
+    # 안전 래퍼
+    safe_glm <- function(form, data, family = NULL) {
+      tryCatch({
+        if (is.null(family)) stats::glm(form, data = data) else stats::glm(form, data = data, family = family)
+      }, error = function(e) NULL)
+    }
+    safe_cox <- function(form, data) {
+      tryCatch({ survival::coxph(form, data = data) }, error = function(e) NULL)
+    }
+    
     res <- lapply(cand, function(v) {
-      f <- switch(input$model_type,
-                  linear   = as.formula(paste0(input$outcome, " ~ ", v)),
-                  logistic = as.formula(paste0(input$outcome, " ~ ", v)),
-                  cox      = as.formula(paste0("Surv(", input$time_col, ", ", input$event_col, ") ~ ", v)))
-      fit <- switch(input$model_type,
-                    linear   = safe_glm(f, df),
-                    logistic = safe_glm(f, df, family = binomial()),
-                    cox      = safe_cox(f, df))
+      # 공식
+      f <- if (isTRUE(mod$time_based)) {
+        stats::as.formula(paste0("Surv(", input$time_col, ", ", input$event_col, ") ~ ", v))
+      } else {
+        stats::as.formula(paste0(input$outcome, " ~ ", v))
+      }
       
+      # 피팅 (time_based / logistic / linear)
+      fit <- if (isTRUE(mod$time_based)) {
+        safe_cox(f, df)
+      } else if (identical(input$model_type, "logistic")) {
+        safe_glm(f, df, family = stats::binomial())
+      } else {
+        safe_glm(f, df)
+      }
+      
+      # 사용된 관측치 수
       n_obs <- tryCatch({
         if (inherits(fit, "coxph")) as.integer(fit$n)
         else if (!is.null(fit) && !is.null(fit$model)) nrow(fit$model)
@@ -344,14 +366,20 @@ server <- function(input, output, session) {
         else NA_integer_
       }, error = function(e) NA_integer_)
       
-      if (is.null(fit)) return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
+      # 실패 처리
+      if (is.null(fit)) {
+        return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
+      }
       
       tdy <- tryCatch(broom::tidy(fit), error = function(e) NULL)
       if (is.null(tdy) || !"estimate" %in% names(tdy)) {
         return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
       }
       
-      tdy <- tdy %>% dplyr::filter(term != "(Intercept)")
+      # 절편 제거 (있으면)
+      if ("term" %in% names(tdy)) {
+        tdy <- tdy[tdy$term != "(Intercept)", , drop = FALSE]
+      }
       if (nrow(tdy) == 0) {
         return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
       }
@@ -359,8 +387,11 @@ server <- function(input, output, session) {
       est <- tdy$estimate[1]
       se  <- tdy$std.error[1]
       p   <- tdy$p.value[1]
-      note <- switch(input$model_type, linear = "Beta", logistic = "OR", cox = "HR")
-      eff <- if (note %in% c("OR", "HR")) exp(est) else est
+      
+      # 라벨 & 효과 변환
+      note <- if (isTRUE(mod$time_based)) "HR" else if (identical(input$model_type, "logistic")) "OR" else "Beta"
+      eff  <- if (note %in% c("OR","HR")) exp(est) else est
+      
       tibble::tibble(var = v, N = n_obs, effect = eff, se = se, p = p, note = note)
     })
     
@@ -368,6 +399,7 @@ server <- function(input, output, session) {
     if (!("N" %in% names(final))) final$N <- NA_integer_
     final
   })
+  
   
   output$univ_table <- renderDT({
     dt <- univ_tbl()
