@@ -21,6 +21,7 @@ suppressPackageStartupMessages({
   library(purrr)
   library(tibble)
   library(rlang)
+  library(shinyjs)
 })
 
 # ----- Helpers -----
@@ -43,35 +44,123 @@ coerce_group_factor <- function(df, group_var) {
 id_for_var <- function(v) paste0("pick__", gsub("[^A-Za-z0-9_]", "_", v))
 
 # gtsummary 생성 (include_vars=NULL이면 전체)
-build_tbl <- function(df, group_var, include_vars = NULL) {
+
+# ---- build_tbl: 통째로 교체 ----
+# ---- build_tbl: 통째로 교체 (show_overall 지원) ----
+# ---- build_tbl: (show_overall, show_n 지원) ----
+build_tbl <- function(df, group_var, include_vars = NULL,
+                      show_overall = FALSE, show_n = FALSE) {
   req(df)
+  
+  # 1) 그룹 변수 정리
   if (!is.null(group_var) && group_var %in% names(df)) {
     df <- coerce_group_factor(df, group_var)
   } else {
     group_var <- NULL
   }
   
-  data_for_tbl <- df
+  # 2) 서브셋 (선택 변수만) — 그룹변수는 항상 보존
   if (!is.null(include_vars)) {
+    include_vars <- intersect(include_vars, names(df))
+    validate(need(length(include_vars) > 0, "선택된 변수가 없습니다."))
     keep <- unique(c(group_var, include_vars))
-    keep <- keep[keep %in% names(df)]
-    if (length(keep) == 0L) return(NULL)
-    data_for_tbl <- df[, keep, drop = FALSE]
+    df <- df[, keep, drop = FALSE]
   }
   
-  tryCatch({
-    if (is.null(group_var)) {
-      tbl_summary(data_for_tbl, missing = "ifany") |>
-        modify_header(label ~ "**Variable**") |>
-        bold_labels()
-    } else {
-      tbl_summary(data_for_tbl, by = !!sym(group_var), missing = "ifany") |>
-        add_p() |>
-        modify_header(label ~ "**Variable**") |>
-        bold_labels()
+  # 3) 변수 분류: 숫자형 & 고유값 > 10만 연속, 나머지는 범주
+  vars_all <- setdiff(names(df), group_var)
+  is_num   <- vapply(df[vars_all], is.numeric, logical(1))
+  nuniq    <- vapply(df[vars_all], function(x) dplyr::n_distinct(x, na.rm = TRUE), integer(1))
+  conts    <- vars_all[ is_num & (nuniq > 10) ]
+  cats     <- setdiff(vars_all, conts)
+  
+  # 4) 정규성 (Shapiro-Wilk) — 그룹별 모두 정규면 정규로 간주
+  compute_normality <- function(df2, group_var2 = NULL, alpha = 0.05) {
+    if (!length(conts)) return(setNames(logical(0), character(0)))
+    is_ok <- function(x) {
+      x <- x[is.finite(x)]; n <- length(x)
+      if (n < 3) return(NA)
+      if (n > 5000) x <- sample(x, 5000)
+      p <- tryCatch(stats::shapiro.test(x)$p.value, error = function(e) NA_real_)
+      if (is.na(p)) NA else (p >= alpha)
     }
-  }, error = function(e) NULL)
+    res <- setNames(rep(FALSE, length(conts)), conts)
+    if (!is.null(group_var2)) {
+      g <- as.factor(df2[[group_var2]])
+      for (v in conts) {
+        by_ok <- tapply(df2[[v]], g, is_ok, simplify = TRUE)
+        res[[v]] <- all(by_ok[!is.na(by_ok)])
+      }
+    } else {
+      for (v in conts) res[[v]] <- isTRUE(is_ok(df2[[v]]))
+    }
+    res
+  }
+  normals <- compute_normality(df, group_var)
+  is_norm <- setNames(rep(FALSE, length(conts)), conts)
+  if (length(normals)) is_norm[names(normals)] <- as.logical(normals[names(normals)])
+  
+  # 5) 통계 서식
+  stat_list <- list()
+  if (length(cats)) {
+    stat_list <- append(stat_list, list(gtsummary::all_categorical() ~ "{n} ({p}%)"))
+  }
+  if (length(conts)) {
+    for (v in conts) {
+      if (isTRUE(is_norm[[v]])) {
+        stat_list <- append(stat_list, setNames(list("{mean} \u00B1 {sd}"), v))
+      } else {
+        stat_list <- append(stat_list, setNames(list("{median} ({p25}, {p75})"), v))
+      }
+    }
+  }
+  
+  # 6) 검정
+  test_list <- NULL
+  if (!is.null(group_var)) {
+    tmp <- list()
+    if (length(cats)) tmp <- append(tmp, list(gtsummary::all_categorical() ~ "chisq.test"))
+    if (length(conts)) {
+      for (v in conts) {
+        if (isTRUE(is_norm[[v]])) tmp <- append(tmp, setNames(list("t.test"), v))
+        else                      tmp <- append(tmp, setNames(list("wilcox.test"), v))
+      }
+    }
+    test_list <- tmp
+  }
+  
+  # 7) gtsummary 생성 + 옵션 적용
+  if (is.null(group_var)) {
+    tbl <- gtsummary::tbl_summary(
+      df,
+      statistic = stat_list,
+      missing = "ifany"
+    )
+    if (isTRUE(show_n)) tbl <- tbl |> gtsummary::add_n()
+    tbl |>
+      gtsummary::modify_header(label ~ "**Variable**") |>
+      gtsummary::bold_labels()
+  } else {
+    validate(need(nlevels(df[[group_var]]) >= 2,
+                  sprintf("그룹 변수 '%s'의 레벨이 2개 이상이어야 합니다.", group_var)))
+    tbl <- gtsummary::tbl_summary(
+      df, by = rlang::sym(group_var),
+      statistic = stat_list,
+      missing = "ifany"
+    )
+    if (isTRUE(show_overall)) tbl <- tbl |> gtsummary::add_overall(last = FALSE)
+    if (isTRUE(show_n))       tbl <- tbl |> gtsummary::add_n()
+    tbl |>
+      gtsummary::add_p(test = test_list) |>
+      gtsummary::modify_header(label ~ "**Variable**") |>
+      gtsummary::bold_labels()
+  }
 }
+
+# ---- build_tbl 끝 ----
+
+# ---- build_tbl 끝 ----
+
 
 # 현재 상태 JSON 직렬화
 state_to_json <- function(df, group_var, selected_vars) {
@@ -100,10 +189,42 @@ state_from_json <- function(path) {
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 example_datasets <- c("gtsummary::trial", "mtcars")
+# 연속변수 정규성 판단: TRUE=정규, FALSE=비정규
+compute_normality <- function(df, group_var = NULL, alpha = 0.05) {
+  if (is.null(df) || !nrow(df)) return(setNames(logical(0), character(0)))
+  is_num <- vapply(df, is.numeric, logical(1))
+  conts  <- names(df)[is_num]
+  if (length(conts) == 0) return(setNames(logical(0), character(0)))
+  
+  is_ok_shapiro <- function(x) {
+    x <- x[is.finite(x)]
+    n <- length(x)
+    if (n < 3) return(NA)                     # 표본이 너무 작으면 판단 보류
+    if (n > 5000) x <- sample(x, 5000)        # Shapiro 제한 회피
+    p <- tryCatch(stats::shapiro.test(x)$p.value, error = function(e) NA_real_)
+    if (is.na(p)) NA else (p >= alpha)
+  }
+  
+  res <- logical(length(conts))
+  names(res) <- conts
+  
+  if (!is.null(group_var) && group_var %in% names(df)) {
+    g <- as.factor(df[[group_var]])
+    for (v in conts) {
+      by_ok <- tapply(df[[v]], g, is_ok_shapiro, simplify = TRUE)
+      # 모든 그룹에서 정규(NA 제외)가 TRUE여야 정규로 간주
+      if (all(by_ok[!is.na(by_ok)])) res[v] <- TRUE else res[v] <- FALSE
+    }
+  } else {
+    for (v in conts) res[v] <- is_ok_shapiro(df[[v]]) %||% FALSE
+  }
+  res
+}
 
 # ----- UI -----
 
 ui <- fluidPage(
+  useShinyjs(),
   titlePanel("Variable Picker for Publication Tables"),
   sidebarLayout(
     sidebarPanel(
@@ -119,6 +240,10 @@ ui <- fluidPage(
       h4("2) 그룹 변수"),
       uiOutput("ui_group_var"),
       helpText("문자/범주형/저카디널리티 숫자(≤10레벨) 열을 제안합니다."),
+      checkboxInput("show_overall", "Overall 열 추가", value = FALSE),
+      checkboxInput("show_n", "Add N 표시", value = FALSE),
+      
+      
       br(),
       h4("3) 현재 상태 저장"),
       downloadButton("download_state", "현재 상태(JSON) 저장"),
@@ -154,7 +279,9 @@ server <- function(input, output, session) {
     group_var = NULL,
     selected_vars = character(0),
     var_order = character(0),   # << 추가: 변수 표시/최종표 출력 순서
-    loading = FALSE     # ← 추가
+    loading = FALSE,     # ← 추가
+    normality = setNames(logical(0), character(0))   # ← 추가
+    
     
   )
   
@@ -184,6 +311,8 @@ server <- function(input, output, session) {
       rv$group_var <- NULL
       rv$selected_vars <- character(0)                     # trial은 기본 선택 없음
       rv$var_order <- setdiff(names(rv$df), rv$group_var)
+      rv$normality <- compute_normality(rv$df, rv$group_var)
+      
     } else if (identical(input$example_data, "mtcars")) {
       rv$df <- as_tibble(mtcars, .name_repair = "check_unique") |>
         mutate(am = factor(am, labels = c("Auto", "Manual")))
@@ -192,6 +321,8 @@ server <- function(input, output, session) {
       base4 <- c("mpg","hp","wt","qsec")
       rv$selected_vars <- intersect(base4, setdiff(names(rv$df), rv$group_var))
       rv$var_order <- setdiff(names(rv$df), rv$group_var)
+      rv$normality <- compute_normality(rv$df, rv$group_var)
+      
     }
   })
   
@@ -207,6 +338,8 @@ server <- function(input, output, session) {
       rv$group_var <- NULL
       rv$selected_vars <- character(0)
       rv$var_order <- setdiff(names(rv$df), rv$group_var)  # ← 이 줄이 “바로 여기”
+      rv$normality <- compute_normality(rv$df, rv$group_var)
+      
       
     }
   })
@@ -238,6 +371,17 @@ server <- function(input, output, session) {
     
     # 표시 순서(그룹변수 제외 전체)
     rv$var_order <- setdiff(names(rv$df), rv$group_var)
+    rv$normality <- compute_normality(rv$df, rv$group_var)
+    
+  })
+  # 그룹변수 없으면 Overall 비활성화(+강제 OFF), 있으면 활성화
+  observe({
+    if (is.null(rv$group_var)) {
+      shinyjs::disable("show_overall")
+      updateCheckboxInput(session, "show_overall", value = FALSE)
+    } else {
+      shinyjs::enable("show_overall")
+    }
   })
   
   # 그룹 변수 UI ----------------------------------------------
@@ -264,14 +408,22 @@ server <- function(input, output, session) {
   })
   
   
- 
   observeEvent(input$group_var, {
-    val <- input$group_var
-    rv$group_var <- if (is.null(val) || identical(val, ".__none__.")) NULL else val
+    rv$group_var <- if (is.null(input$group_var) || input$group_var == "" || identical(input$group_var, ".__none__.")) {
+      NULL
+    } else {
+      input$group_var
+    }
+    
+    # 그룹 변수가 지정되면 var_order에서 제외
     if (!is.null(rv$group_var)) {
       rv$var_order <- setdiff(rv$var_order, rv$group_var)
     }
+    
+    # 정규성 결과 업데이트
+    rv$normality <- compute_normality(rv$df, rv$group_var)
   })
+  
   
     
 
@@ -323,7 +475,9 @@ server <- function(input, output, session) {
     req(rv$df)
     
     # 1) gtsummary 생성
-    base_tbl <- build_tbl(rv$df, rv$group_var, include_vars = NULL)
+    base_tbl <- build_tbl(rv$df, rv$group_var, include_vars = NULL,
+                          show_overall = isTRUE(input$show_overall),
+                          show_n       = isTRUE(input$show_n))
     validate(need(!is.null(base_tbl), "요약을 생성할 수 없습니다."))
     
     tb <- base_tbl$table_body
@@ -439,22 +593,42 @@ server <- function(input, output, session) {
   
   
 
+
+  # Final 탭: 열렸을 때만 즉시 계산 (eventReactive 없이)
+  # Final 탭: 열렸을 때만 그리고, 동일 상태면 캐시 재사용
   output$gt_final <- gt::render_gt({
     req(identical(input$tabs, "Final Table"))
-    ft <- final_tbl()
-    validate(need(!is.null(ft), "선택된 변수가 없습니다."))
+    
+    req(rv$df)
+    sel <- rv$selected_vars %||% character(0)
+    validate(need(length(sel) > 0, "선택된 변수가 없습니다. Variable Selection 탭에서 체크하세요."))
+    
+    # 선택 순서 반영
+    if (length(rv$var_order)) sel <- intersect(rv$var_order, sel)
+    
+    ft <- build_tbl(
+      rv$df, rv$group_var, include_vars = sel,
+      show_overall = isTRUE(input$show_overall),
+      show_n       = isTRUE(input$show_n)
+    )
+    
     gtsummary::as_gt(ft) |> gt::tab_options(table.width = gt::px(800))
   }) |>
-    bindCache(               # ← 동일 상태면 재사용 (Shiny 1.6+)
+    bindCache(
+      # 캐시 키들: 그룹/선택/순서/데이터 스펙 + 옵션
       rv$group_var,
       rv$selected_vars,
       rv$var_order,
-      nrow(rv$df)            # 데이터 규모 바뀌면 캐시 무효화
-    ) |>
-    bindEvent(input$tabs)     # 탭 전환에만 반응
+      nrow(rv$df),
+      names(rv$df),
+      isTRUE(input$show_overall),
+      isTRUE(input$show_n)
+    )
   
-  # render 정의 '직후'에 둬야 함
+  # 숨겨졌을 땐 계산 중단
   outputOptions(output, "gt_final", suspendWhenHidden = TRUE)
+  
+
   
   
   # 상태 저장 --------------------------------------------------
