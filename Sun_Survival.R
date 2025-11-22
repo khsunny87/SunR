@@ -7,6 +7,7 @@ library(purrr)
 library(tidyr)
 library(tidycmprsk)
 library(scales)
+library(ggsurvfit)
 
 toIQR<-function(quant){
   paste0(quant['50'],' (',quant['25'],'-',quant['75'],')')
