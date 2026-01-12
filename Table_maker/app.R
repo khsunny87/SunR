@@ -6,6 +6,7 @@
 # - Variable Selection tab: gtsummary 표의 변수명 옆에 체크박스 삽입
 # - Final Table tab: 체크된 변수만 깔끔 요약
 # ------------------------------------------------------------
+options(shiny.maxRequestSize = 100 * 1024^2)
 
 suppressPackageStartupMessages({
   library(shiny)
@@ -62,7 +63,7 @@ build_tbl <- function(df, group_var, include_vars = NULL,
   # 2) 서브셋 (선택 변수만) — 그룹변수는 항상 보존
   if (!is.null(include_vars)) {
     include_vars <- intersect(include_vars, names(df))
-    validate(need(length(include_vars) > 0, "선택된 변수가 없습니다."))
+    shiny::validate(shiny::need(length(include_vars) > 0, "선택된 변수가 없습니다."))
     keep <- unique(c(group_var, include_vars))
     df <- df[, keep, drop = FALSE]
   }
@@ -141,7 +142,7 @@ build_tbl <- function(df, group_var, include_vars = NULL,
       gtsummary::modify_header(label ~ "**Variable**") |>
       gtsummary::bold_labels()
   } else {
-    validate(need(nlevels(df[[group_var]]) >= 2,
+    shiny::validate(shiny::need(nlevels(df[[group_var]]) >= 2,
                   sprintf("그룹 변수 '%s'의 레벨이 2개 이상이어야 합니다.", group_var)))
     tbl <- gtsummary::tbl_summary(
       df, by = rlang::sym(group_var),
@@ -256,13 +257,17 @@ ui <- fluidPage(
           title = "Variable Selection",
           br(),
           helpText("아래 표에서 변수명 좌측 체크박스를 켜면 선택됩니다."),
-          gt_output("gt_all")  # 테이블 내부에 체크박스 삽입
+          uiOutput("gt_all")
+
+          #gt_output("gt_all")  # 테이블 내부에 체크박스 삽입
         ),
         tabPanel(
           title = "Final Table",
           br(),
           helpText("체크된 변수들만 그룹 비교하여 출력합니다."),
-          gt_output("gt_final")
+          uiOutput("gt_final")
+
+          #gt_output("gt_final")
         )
       ),
       width = 9
@@ -478,7 +483,10 @@ server <- function(input, output, session) {
     base_tbl <- build_tbl(rv$df, rv$group_var, include_vars = NULL,
                           show_overall = isTRUE(input$show_overall),
                           show_n       = isTRUE(input$show_n))
-    validate(need(!is.null(base_tbl), "요약을 생성할 수 없습니다."))
+    shiny::validate(shiny::need(!is.null(base_tbl), "요약을 생성할 수 없습니다."))
+    #if (is.null(base_tbl)) {
+  #shiny::validate("요약을 생성할 수 없습니다.")
+   # }
     
     tb <- base_tbl$table_body
     tb$..orig <- seq_len(nrow(tb))  # 원래 행 순서
@@ -601,7 +609,7 @@ server <- function(input, output, session) {
     
     req(rv$df)
     sel <- rv$selected_vars %||% character(0)
-    validate(need(length(sel) > 0, "선택된 변수가 없습니다. Variable Selection 탭에서 체크하세요."))
+    shiny::validate(shiny::need(length(sel) > 0, "선택된 변수가 없습니다. Variable Selection 탭에서 체크하세요."))
     
     # 선택 순서 반영
     if (length(rv$var_order)) sel <- intersect(rv$var_order, sel)
