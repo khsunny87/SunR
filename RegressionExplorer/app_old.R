@@ -326,141 +326,128 @@ server <- function(input, output, session) {
   
   
   # --- Univariable screening ---
-
-# --- 최적화된 유니바리에이트 스크리닝 ---
   univ_tbl <- reactive({
     df  <- cleaned_data()
     mod <- get_model(input$model_type)
     
-    # 분석에서 제외할 기본 컬럼들
-    drop_cols <- if (isTRUE(mod$time_based)) {
-      c(input$time_col, input$event_col)
-    } else {
-      input$outcome
-    }
+    # 제외할 컬럼: time_based면 time/event, 아니면 outcome
+    drop_cols <- if (isTRUE(mod$time_based)) c(input$time_col, input$event_col) else input$outcome
     cand <- setdiff(names(df), drop_cols)
     
+    # 안전 래퍼
+    safe_glm <- function(form, data, family = NULL) {
+      tryCatch({
+        if (is.null(family)) stats::glm(form, data = data) else stats::glm(form, data = data, family = family)
+      }, error = function(e) NULL)
+    }
+    safe_cox <- function(form, data) {
+      tryCatch({ survival::coxph(form, data = data) }, error = function(e) NULL)
+    }
+    
     res <- lapply(cand, function(v) {
-      x_val <- df[[v]]
-      
-      # 기본 결과 구조 (에러 시 반환용)
-      empty_res <- tibble::tibble(
-        var = v, N = nrow(df), effect = NA_real_, se = NA_real_, 
-        p = NA_real_, note = NA_character_, status = "error"
-      )
-
-      # --- 1단계: 사전 검증 (Pre-check) ---
-      if (all(is.na(x_val))) {
-        return(empty_res %>% mutate(note = "All NA values"))
-      }
-      
-      unique_vals <- na.omit(unique(x_val))
-      if (length(unique_vals) < 2) {
-        return(empty_res %>% mutate(note = "Constant (No variance)"))
-      }
-      
-      # 범주형(문자/팩터) 변수인데 레벨이 너무 많으면 (예: 30개) ID로 간주하고 차단
-      if (!is.numeric(x_val)  && length(unique_vals) > 30) {
-        return(empty_res %>% mutate(note = "Too many levels (>30)"))
-      }
-
-      # --- 2단계: 모델 피팅 (Fitting) ---
-      # 변수명에 공백/특수문자가 있을 수 있으므로 백틱(`)으로 감쌈
+      # 공식
       f <- if (isTRUE(mod$time_based)) {
-        stats::as.formula(paste0("Surv(`", input$time_col, "`, `", input$event_col, "`) ~ `", v, "`"))
+        stats::as.formula(paste0("Surv(", input$time_col, ", ", input$event_col, ") ~ ", v))
       } else {
-        stats::as.formula(paste0("`", input$outcome, "` ~ `", v, "`"))
+        stats::as.formula(paste0(input$outcome, " ~ ", v))
       }
       
-      fit <- tryCatch({
-        if (isTRUE(mod$time_based)) {
-          survival::coxph(f, data = df)
-        } else if (identical(input$model_type, "logistic")) {
-          stats::glm(f, data = df, family = stats::binomial())
-        } else {
-          stats::glm(f, data = df)
-        }
-      }, error = function(e) {
-        return(NULL) # 피팅 실패 시 NULL 반환
-      })
+      # 피팅 (time_based / logistic / linear)
+      fit <- if (isTRUE(mod$time_based)) {
+        safe_cox(f, df)
+      } else if (identical(input$model_type, "logistic")) {
+        safe_glm(f, df, family = stats::binomial())
+      } else {
+        safe_glm(f, df)
+      }
       
+      # 사용된 관측치 수
+      n_obs <- tryCatch({
+        if (inherits(fit, "coxph")) as.integer(fit$n)
+        else if (!is.null(fit) && !is.null(fit$model)) nrow(fit$model)
+        else if (!is.null(fit) && !is.null(fit$y)) NROW(fit$y)
+        else NA_integer_
+      }, error = function(e) NA_integer_)
+      
+      # 실패 처리
       if (is.null(fit)) {
-        return(empty_res %>% mutate(note = "Model convergence failed"))
+        return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
       }
-
-      # --- 3단계: 결과 정리 (Tidying) ---
+      
       tdy <- tryCatch(broom::tidy(fit), error = function(e) NULL)
-      
-      # 절편(Intercept)을 제외한 첫 번째 변수 행 추출
-      res_row <- if (!is.null(tdy)) tdy[tdy$term != "(Intercept)", , drop = FALSE] else NULL
-      
-      if (is.null(res_row) || nrow(res_row) == 0) {
-        return(empty_res %>% mutate(note = "No valid coefficients"))
+      if (is.null(tdy) || !"estimate" %in% names(tdy)) {
+        return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
       }
       
-      # 첫 번째 행 사용 (범주형의 경우 첫 번째 레벨 기준)
-      target <- res_row[1, ]
+      # 절편 제거 (있으면)
+      if ("term" %in% names(tdy)) {
+        tdy <- tdy[tdy$term != "(Intercept)", , drop = FALSE]
+      }
+      if (nrow(tdy) == 0) {
+        return(tibble::tibble(var = v, N = n_obs, effect = NA_real_, se = NA_real_, p = NA_real_, note = NA_character_))
+      }
       
-      eff_label <- if (isTRUE(mod$time_based)) "HR" else if (identical(input$model_type, "logistic")) "OR" else "Beta"
-      eff_val   <- if (eff_label %in% c("OR","HR")) exp(target$estimate) else target$estimate
+      est <- tdy$estimate[1]
+      se  <- tdy$std.error[1]
+      p   <- tdy$p.value[1]
       
-      # 성공 결과 반환
-      tibble::tibble(
-        var = v, 
-        N = if(inherits(fit, "coxph")) as.integer(fit$n) else stats::nobs(fit), 
-        effect = eff_val, 
-        se = target$std.error, 
-        p = target$p.value, 
-        note = eff_label,
-        status = "success"
-      )
+      # 라벨 & 효과 변환
+      note <- if (isTRUE(mod$time_based)) "HR" else if (identical(input$model_type, "logistic")) "OR" else "Beta"
+      eff  <- if (note %in% c("OR","HR")) exp(est) else est
+      
+      tibble::tibble(var = v, N = n_obs, effect = eff, se = se, p = p, note = note)
     })
     
-    # 리스트 합치기
-    dplyr::bind_rows(res)
+    final <- purrr::compact(res) %>% dplyr::bind_rows()
+    if (!("N" %in% names(final))) final$N <- NA_integer_
+    final
   })
-
-output$univ_table <- renderDT({
+  
+  
+  output$univ_table <- renderDT({
     dt <- univ_tbl()
     req(!is.null(dt), nrow(dt) > 0)
     
-    # VIF 정보 조인 (기존 로직 유지)
     vif_df <- vif_shared() %>% dplyr::select(Variable, VIF)
     dt <- dt %>% dplyr::left_join(vif_df, by = c("var" = "Variable"))
+    if (!("N"   %in% names(dt)))  dt$N   <- NA_integer_
+    if (!("VIF" %in% names(dt)))  dt$VIF <- NA_real_
     
     sel_now   <- rv$sel
     force_now <- rv$force
     
-    # --- 체크박스 생성 로직 (분석 성공 변수만 체크 가능) ---
-    dt$Select <- vapply(seq_len(nrow(dt)), function(i) {
-      if (dt$status[i] != "success") return("") # 실패한 변수는 체크박스 미표시
-      
-      as.character(shiny::tags$input(
+    base <- dt %>% dplyr::select(var, N, effect, se, p, note, VIF)
+    
+    base$Select <- vapply(
+      base$var,
+      function(v) as.character(shiny::tags$input(
         type = "checkbox", class = "selChk",
-        id = paste0("sel_", dt$var[i]),
-        checked = if (dt$var[i] %in% sel_now) "checked" else NULL
-      ))
-    }, character(1))
+        id = paste0("sel_", v),
+        checked = if (v %in% sel_now) "checked" else NULL
+      )),
+      character(1)
+    )
     
-    dt$`Force-in` <- vapply(seq_len(nrow(dt)), function(i) {
-      if (dt$status[i] != "success") return("")
-      
-      disabled <- !(dt$var[i] %in% sel_now)
-      as.character(shiny::tags$input(
-        type = "checkbox", class = "forceChk",
-        id = paste0("force_", dt$var[i]),
-        checked  = if (dt$var[i] %in% force_now) "checked" else NULL,
-        disabled = if (disabled) "disabled" else NULL
-      ))
-    }, character(1))
+    base$`Force-in` <- vapply(
+      base$var,
+      function(v) {
+        disabled <- !(v %in% sel_now)
+        as.character(shiny::tags$input(
+          type = "checkbox", class = "forceChk",
+          id = paste0("force_", v),
+          checked  = if (v %in% force_now) "checked" else NULL,
+          disabled = if (disabled) "disabled" else NULL
+        ))
+      },
+      character(1)
+    )
     
-    # --- 최종 테이블 정리 ---
-    out <- dt %>%
+    out <- base %>%
       dplyr::mutate(
         CI_low  = ifelse(is.na(effect), NA, effect - 1.96 * se),
         CI_high = ifelse(is.na(effect), NA, effect + 1.96 * se),
         `p-value` = dplyr::case_when(
-          is.na(p) ~ "",
+          is.na(p) ~ NA_character_,
           p < 0.001 ~ "<0.001",
           TRUE ~ sprintf("%.3f", p)
         ),
@@ -469,15 +456,17 @@ output$univ_table <- renderDT({
       dplyr::transmute(
         Select, `Force-in`,
         Variable = var,
-        N,
-        Result = ifelse(is.na(effect), NA_real_, round(effect, 4)),
-        `95% CI` = ifelse(is.na(CI_low), "",
+        N        = N,
+        Effect   = round(effect, 4),
+        `95% CI` = ifelse(is.na(CI_low), NA_character_,
                           paste0("(", round(CI_low, 4), ", ", round(CI_high, 4), ")")),
         `p-value`,
-        VIF = ifelse(is.na(VIF), "", as.character(round(VIF, 2))),
-        Note = note, # 분석 성공 여부나 사유 표시
+        VIF      = ifelse(is.na(VIF), NA, round(VIF, 3)),
         .__sig__
       )
+    
+    eff_name_by_type <- list(linear = "\u03B2", logistic = "OR", cox = "HR")
+    names(out)[names(out) == "Effect"] <- eff_name_by_type[[input$model_type]] %||% "Effect"
     
     sig_idx <- which(names(out) == ".__sig__") - 1
     
@@ -485,11 +474,11 @@ output$univ_table <- renderDT({
       out,
       escape = FALSE, selection = "none", rownames = FALSE,
       options = list(
-        scrollX = TRUE, pageLength = 50,
+        scrollX = TRUE, pageLength = 10,
+        ordering = TRUE, order = list(),
         columnDefs = list(list(visible = FALSE, targets = sig_idx))
       ),
       callback = DT::JS("
-        // 체크박스 이벤트 핸들러 (기존과 동일)
         table.on('change', 'input.selChk', function() {
           var id = $(this).attr('id');
           var v  = id.replace('sel_','');
@@ -505,8 +494,6 @@ output$univ_table <- renderDT({
       ")
     ) %>% highlight_sig_rows()
   })
-  
-
   
   observeEvent(input$sel_changed, {
     v <- input$sel_changed$var
