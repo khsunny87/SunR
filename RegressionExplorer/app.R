@@ -17,7 +17,10 @@ base::suppressPackageStartupMessages({
   library(survival)
 })
 # ----- Registry load -----
+options(shiny.maxRequestSize = 100 * 1024^2)
+
 source("model_registry.R")
+
 .settings <- load_model_settings("settings.json")
 register_models(.settings)
 
