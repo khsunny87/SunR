@@ -162,7 +162,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
     
     res<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       survfit2(TS ~ group, data = .)
-    if(P_v!="" & print_p){
+    if(P_v=="" & print_p){
     log_rank<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       survdiff(TS ~group,data=.)
     
@@ -245,7 +245,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   }else{
     res<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       tidycmprsk::cuminc(TS ~ group, data = .)
-     if(P_v!="" & print_p){
+     if(P_v=="" & print_p){
    
     real_p<-broom::glance(res)$p.value_1
     P_v<-case_when(
