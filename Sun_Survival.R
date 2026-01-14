@@ -134,7 +134,7 @@ MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plo
 
 
 
-Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,palette=c(muted("blue"), muted("red")),type='survival',y_title='Survival',y_lim=c(0,1),P_x=0,P_y=Inf,main_title="",print_p=T){
+Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,palette=c(muted("blue"), muted("red")),type='survival',y_title='Survival',y_lim=c(0,1),P_x=0,P_y=Inf,main_title="",P_v="",print_p=T){
   
   
   if(Group_name==""){
@@ -162,7 +162,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
     
     res<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       survfit2(TS ~ group, data = .)
-    
+    if(P_v!="" & print_p){
     log_rank<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       survdiff(TS ~group,data=.)
     
@@ -173,7 +173,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
       #TRUE~paste("P =",round(real_p,digits=3))
       TRUE~paste("P =",sprintf("%.3f",real_p))
     )
-    
+  }
     km_fig<-res%>%
       ggsurvfit(type=type,linewidth=1)+
       scale_color_manual(values = palette,labels=Group_label)+
@@ -220,7 +220,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
 }
 
 
-Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,outcome='outcome',palette=c(muted("blue"), muted("red")),y_lim=c(0,1),main_title="",print_p=T){
+Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,outcome='outcome',palette=c(muted("blue"), muted("red")),y_lim=c(0,1),main_title="",print_p=T,P_v=""){
   
   if(is.null(Group_label)){
     if(is.factor(data[[Group_name]])){
@@ -245,14 +245,15 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   }else{
     res<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       tidycmprsk::cuminc(TS ~ group, data = .)
-    
+     if(P_v!="" & print_p){
+   
     real_p<-broom::glance(res)$p.value_1
     P_v<-case_when(
       real_p<0.001~"P < 0.001",
       real_p>0.999~"P > 0.999",
       TRUE~paste("P =",round(real_p,digits=3))
     )
-    
+  }
     
     
     
