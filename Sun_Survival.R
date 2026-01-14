@@ -144,7 +144,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
     P_v=""  
     km_fig<-res%>%
       ggsurvfit(type=type,linewidth=1,color=muted('blue')) +
-      add_confidence_interval(fill=muted('blue')) 
+      if (conf.int) add_confidence_interval(fill=muted('blue')) 
     surv_tbl<-Survival_Table(data[[TS_name]],1,seq(break.by,xmax,break.by),unit)
     
     
@@ -178,7 +178,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
       ggsurvfit(type=type,linewidth=1)+
       scale_color_manual(values = palette,labels=Group_label)+
       scale_fill_manual(values = palette,labels=Group_label)+
-      add_confidence_interval()
+      if (conf.int) add_confidence_interval()
     
     surv_tbl<-Survival_Table(data[[TS_name]],data[[Group_name]],seq(break.by,xmax,break.by),unit)
     surv_tbl$strata=c('Overall',Group_label)
@@ -239,7 +239,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
     P_v=""  
     cmp_fig<-res%>%
       ggcuminc(color=muted('blue'),outcome=outcome,linewidth=1) +
-      add_confidence_interval(fill=muted('blue')) 
+      if (conf.int) add_confidence_interval(fill=muted('blue')) 
     
     
   }else{
@@ -260,7 +260,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
       ggcuminc(outcome=outcome,linewidth=1) + 
       scale_color_manual(values = palette,labels=Group_label)+
       scale_fill_manual(values = palette,labels=Group_label)+
-      add_confidence_interval()
+      if (conf.int) add_confidence_interval()
     
   }
   
