@@ -188,7 +188,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   km_fig<-km_fig+
     add_censor_mark(size = 2)+
     labs(x = unit,y=y_title) + 
-    if (print_p) annotate("text", x=P_x, y=P_y, label=P_v, size=7,hjust=0,vjust=2)+
+    {if(print_p) annotate("text", x=P_x, y=P_y, label=P_v, size=7,hjust=0,vjust=2) else NULL}+
     scale_x_continuous(labels=function(x)x,breaks = seq(0, xmax, by = break.by))+
     scale_y_continuous(labels = scales::percent,limits=y_lim)+ 
     theme_classic()+
@@ -266,7 +266,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   
   cmp_fig<-cmp_fig+
     labs(x = unit) + 
-    if (print_p) annotate("text", x=0, y=Inf, label=P_v, size=7,hjust=0,vjust=2)+
+    {if (print_p) annotate("text", x=0, y=Inf, label=P_v, size=7,hjust=0,vjust=2) else NULL}+
     scale_x_continuous(labels=function(x) x,breaks = seq(0, xmax, by = break.by))+
     scale_y_continuous(labels = scales::percent,limits=y_lim)+ 
     
