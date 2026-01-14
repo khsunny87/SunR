@@ -134,13 +134,13 @@ MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plo
 
 
 
-Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,palette=c(muted("blue"), muted("red")),type='survival',y_title='Survival',y_lim=c(0,1),P_x=0,P_y=Inf,main_title=""){
+Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,palette=c(muted("blue"), muted("red")),type='survival',y_title='Survival',y_lim=c(0,1),P_x=0,P_y=Inf,main_title="",print_p=T){
   
   
   if(Group_name==""){
     res<-data_frame(TS=data[[TS_name]])%>%
       survfit2(TS ~ 1, data = .)
-    
+    print_p=F    
     P_v=""  
     km_fig<-res%>%
       ggsurvfit(type=type,linewidth=1,color=muted('blue')) +
@@ -188,7 +188,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   km_fig<-km_fig+
     add_censor_mark(size = 2)+
     labs(x = unit,y=y_title) + 
-    annotate("text", x=P_x, y=P_y, label=P_v, size=7,hjust=0,vjust=2)+
+    if (print_p) annotate("text", x=P_x, y=P_y, label=P_v, size=7,hjust=0,vjust=2)+
     scale_x_continuous(labels=function(x)x,breaks = seq(0, xmax, by = break.by))+
     scale_y_continuous(labels = scales::percent,limits=y_lim)+ 
     theme_classic()+
@@ -220,7 +220,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
 }
 
 
-Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,outcome='outcome',palette=c(muted("blue"), muted("red")),y_lim=c(0,1),main_title=""){
+Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,outcome='outcome',palette=c(muted("blue"), muted("red")),y_lim=c(0,1),main_title="",print_p=T){
   
   if(is.null(Group_label)){
     if(is.factor(data[[Group_name]])){
@@ -235,7 +235,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   if(Group_name==""){
     res<-data_frame(TS=data[[TS_name]])%>%
       tidycmprsk::cuminc(TS ~ 1, data = .)
-    
+    print_p=F
     P_v=""  
     cmp_fig<-res%>%
       ggcuminc(color=muted('blue'),outcome=outcome,linewidth=1) +
@@ -266,7 +266,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   
   cmp_fig<-cmp_fig+
     labs(x = unit) + 
-    annotate("text", x=0, y=Inf, label=P_v, size=7,hjust=0,vjust=2)+
+    if (print_p) annotate("text", x=0, y=Inf, label=P_v, size=7,hjust=0,vjust=2)+
     scale_x_continuous(labels=function(x) x,breaks = seq(0, xmax, by = break.by))+
     scale_y_continuous(labels = scales::percent,limits=y_lim)+ 
     
