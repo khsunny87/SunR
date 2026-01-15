@@ -13,6 +13,15 @@ toIQR<-function(quant){
   paste0(quant['50'],' (',quant['25'],'-',quant['75'],')')
 }
 
+l_to_b<-function(x){
+
+  old_label<-label(x)
+  ret_x<-if_else(x,1,0)
+label(ret_x)<-old_label
+  return(ret_x)
+}
+
+
 Get_median_fu<-function(TS,digits=2){
   ifelse(TS[,2]==0,1,0)
   #ret<-survfit(Surv(TS[,1],1-TS[,2])~1)
