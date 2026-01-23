@@ -107,7 +107,10 @@ main <- mainPanel(
       h5("Coefficients"),
       DTOutput("coef_table"),
       h5("Model diagnostics / notes"),
-      verbatimTextOutput("model_notes")
+      verbatimTextOutput("model_notes"),
+      h5("Model plot"),
+      plotOutput("model_plot")
+
     ),
     tabPanel("Saved results",
              DTOutput("snapshots"),
@@ -843,7 +846,29 @@ output$univ_table <- renderDT({
     }
   })
   # --- END REPLACE ---
+  output$model_plot <- renderPlot({
+  fit <- fit_store()
+    if (inherits(fit, "coxph")) {
+      # PH 가정 진단 안전 실행
+      tryCatch({
+        ph <- survival::cox.zph(fit)
+        
+          nvar <- nrow(ph$table) - 1  # 마지막은 GLOBAL
+        nrow_plot <- ceiling(nvar)
+
+        op <- par(no.readonly = TRUE)
+        on.exit(par(op), add = TRUE)
+
+  par(mfrow = c(nrow_plot, 1))
+  plot(ph)
   
+      }, error = function(e) {
+        cat("cox.zph failed:", e$message)
+      })}
+    
+
+  })
+
   
   # --- Downloads ---
   output$download_table <- downloadHandler(
