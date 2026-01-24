@@ -27,7 +27,7 @@ register_models(.settings)
 # Build choices for model_type (keep the same labels/ids order as settings.json)
 .model_choices <- setNames(vapply(.settings, `[[`, "", "id"),
                            vapply(.settings, `[[`, "", "label"))
-# Ensure the same visible labels as before: Linear / Logistic / Time-to-event
+# Ensure the same visible labels as before: Linear / Logistic / Cox
 # (The order/labels should match settings.json; otherwise override here.)
 
 # ---------- UI ----------
@@ -38,7 +38,7 @@ sidebar <- sidebarPanel(
   prettySwitch("use_example", "Use example data", value = TRUE, status = "info"),
   conditionalPanel(
     condition = "input.use_example == true",
-    helpText("Examples: mtcars (for linear/logistic), lung (for time-to-event)")
+    helpText("Examples: mtcars (for linear/logistic), lung (for Cox)")
   ),
   hr(),
   
@@ -174,7 +174,18 @@ server <- function(input, output, session) {
       checkboxInput("nonzero_event", "Treat non-zero as event (coerce to 0/1)", TRUE)
     )
   })
-
+  
+  
+  # --- Safe wrappers ---
+  safe_glm <- function(form, data, family = NULL) {
+    tryCatch({
+      if (is.null(family)) glm(form, data = data) else glm(form, data = data, family = family)
+    }, error = function(e) NULL)
+  }
+  safe_cox <- function(form, data) {
+    tryCatch({ coxph(form, data = data) }, error = function(e) NULL)
+  }
+  
   # --- Data cleaning ---
   cleaned_data <- reactive({
     df <- data_ex()
@@ -191,14 +202,11 @@ server <- function(input, output, session) {
     needed <- unique(needed[needed != ""])
     
     df2 <- df
-# Cox PH only: coerce event to 0/1 if requested
-if (input$model_type == "cox" &&
-    !is.null(input$event_col) &&
-    isTRUE(input$nonzero_event)) {
-
-  df2[[input$event_col]] <- as.integer(df2[[input$event_col]] != 0)
-}
-
+    if (identical(input$model_type, "cox") && !is.null(input$event_col)) {
+      if (isTRUE(input$nonzero_event)) {
+        df2[[input$event_col]] <- as.integer(df2[[input$event_col]] != 0)
+      }
+    }
     if (isTRUE(input$drop_na) && length(needed) > 0) {
       df2 <- df2[complete.cases(df2[, needed, drop = FALSE]), ]
     }
@@ -367,10 +375,17 @@ if (input$model_type == "cox" &&
         stats::as.formula(paste0("`", input$outcome, "` ~ `", v, "`"))
       }
       
-      fit <- tryCatch(
-        mod$fit(f, data = df, input = input),
-        error = function(e) NULL
-      )
+      fit <- tryCatch({
+        if (isTRUE(mod$time_based)) {
+          survival::coxph(f, data = df)
+        } else if (identical(input$model_type, "logistic")) {
+          stats::glm(f, data = df, family = stats::binomial())
+        } else {
+          stats::glm(f, data = df)
+        }
+      }, error = function(e) {
+        return(NULL) # 피팅 실패 시 NULL 반환
+      })
       
       if (is.null(fit)) {
         return(empty_res %>% mutate(note = "Model convergence failed"))
@@ -395,7 +410,7 @@ if (input$model_type == "cox" &&
       # 성공 결과 반환
       tibble::tibble(
         var = v, 
-        N = as.integer(stats::nobs(fit)), 
+        N = if(inherits(fit, "coxph")) as.integer(fit$n) else stats::nobs(fit), 
         effect = eff_val, 
         se = target$std.error, 
         p = target$p.value, 
@@ -530,10 +545,10 @@ output$univ_table <- renderDT({
     form <- current_formula()
     mod  <- get_model(input$model_type)
     
-    # Predictor check: time-to-event model requires at least one term
+    # 예측자 점검(Cox는 최소 1개 필요)
     no_predictors <- identical(attr(terms(form), "term.labels"), character(0))
     if (isTRUE(mod$time_based) && no_predictors) {
-      showNotification("Time-to-event model requires at least one predictor. Select covariates first.", type = "warning")
+      showNotification("Cox PH requires at least one predictor. Select covariates first.", type = "warning")
       fit_store(NULL)
       return(invisible(NULL))
     }
@@ -625,10 +640,13 @@ output$univ_table <- renderDT({
     if (is.null(fit)) return(tibble::tibble()) # 모델 없으면 렌더 중단
     
     # 관측치 N
-    n_obs <- tryCatch(as.integer(stats::nobs(fit)), error = function(e) NA_integer_)
-
-    mod <- get_model(input$model_type)
-# tidy 안전 호출
+    n_obs <- tryCatch({
+      if (inherits(fit, "coxph")) as.integer(fit$n)
+      else if (!is.null(fit))     as.integer(stats::nobs(fit))
+      else NA_integer_
+    }, error = function(e) NA_integer_)
+    
+    # tidy 안전 호출
     tdy <- tryCatch({
       broom::tidy(fit, conf.int = FALSE)
     }, error = function(e) NULL)
@@ -663,24 +681,24 @@ output$univ_table <- renderDT({
     if (!("p.value"   %in% names(tdy))) tdy$p.value   <- NA_real_
     
     # 효과/CI 계산
-    if (isTRUE(mod$time_based)) {
-      metric <- mod$effect_name %||% "HR"
+    if (inherits(fit, "coxph")) {
+      metric <- "HR"
       effect <- exp(tdy$estimate)
       CI_low <- exp(tdy$estimate - 1.96 * tdy$std.error)
       CI_high<- exp(tdy$estimate + 1.96 * tdy$std.error)
     } else if (!is.null(stats::family(fit)) && stats::family(fit)$family == "binomial") {
-      metric <- mod$effect_name %||% "OR"
+      metric <- "OR"
       effect <- exp(tdy$estimate)
       CI_low <- exp(tdy$estimate - 1.96 * tdy$std.error)
       CI_high<- exp(tdy$estimate + 1.96 * tdy$std.error)
     } else {
-      metric <- mod$effect_name %||% "Beta"
+      metric <- "Beta"
       effect <- tdy$estimate
       CI_low <- tdy$estimate - 1.96 * tdy$std.error
       CI_high<- tdy$estimate + 1.96 * tdy$std.error
     }
-
-# 표시용 p
+    
+    # 표시용 p
     pnum <- tdy$p.value
     pfmt <- ifelse(is.na(pnum), NA_character_,
                    ifelse(pnum < 0.001, "<0.001", sprintf("%.3f", pnum)))
@@ -799,85 +817,60 @@ output$univ_table <- renderDT({
     ) %>% highlight_sig_rows()
   })
   
-  
   # --- Diagnostics ---
+  # --- REPLACE THIS WHOLE BLOCK ---
   output$model_notes <- renderPrint({
     fit <- fit_store()
+    
+    # validate() 대신 안전 가드
     if (is.null(fit)) {
       cat("No model fitted yet.")
       return(invisible())
     }
-
-    mod <- get_model(input$model_type)
-    diag <- tryCatch(mod$diagnostics(fit), error = function(e) paste("diagnostics failed:", e$message))
-
-    if (is.null(diag)) {
-      cat("No diagnostics available.")
-      return(invisible())
-    }
-
-    if (is.character(diag)) {
-      cat(paste(diag, collapse = "\n"))
+    
+    if (inherits(fit, "coxph")) {
+      # PH 가정 진단 안전 실행
+      tryCatch({
+        ph <- survival::cox.zph(fit)
+        print(ph)
+      }, error = function(e) {
+        cat("cox.zph failed:", e$message)
+      })
     } else {
-      print(diag)
+      # 일반 회귀 요약
+      tryCatch({
+        print(summary(fit))
+      }, error = function(e) {
+        cat("summary failed:", e$message)
+      })
     }
   })
-
+  # --- END REPLACE ---
   output$model_plot <- renderPlot({
-    fit <- fit_store()
-    if (is.null(fit)) return(invisible())
+  fit <- fit_store()
+    if (inherits(fit, "coxph")) {
+      # PH 가정 진단 안전 실행
+      tryCatch({
+        ph <- survival::cox.zph(fit)
+        
+          nvar <- nrow(ph$table) - 1  # 마지막은 GLOBAL
+        nrow_plot <- ceiling(nvar)
 
-    mod <- get_model(input$model_type)
-    diag <- tryCatch(mod$diagnostics(fit), error = function(e) NULL)
-    if (is.null(diag) || is.character(diag)) return(invisible())
+        op <- par(no.readonly = TRUE)
+        on.exit(par(op), add = TRUE)
 
-    tryCatch({
-      op <- par(no.readonly = TRUE)
-      on.exit(par(op), add = TRUE)
+  par(mfrow = c(nrow_plot, 1))
+  plot(ph)
+  
+      }, error = function(e) {
+        cat("cox.zph failed:", e$message)
+      })}
+    
 
-      # If diagnostics has a table matrix (e.g., time-to-event PH test),
-      # draw one panel per row except an optional GLOBAL row.
-      n_panels <- 1L
-      if (!is.null(diag$table) && is.matrix(diag$table)) {
-        rn <- rownames(diag$table)
-        n_panels <- nrow(diag$table)
-        if (!is.null(rn) && any(toupper(rn) == "GLOBAL")) n_panels <- n_panels - 1L
-        n_panels <- max(1L, n_panels)
-      }
-      par(mfrow = c(n_panels, 1))
-
-      if (!is.null(diag$table) && is.matrix(diag$table) && n_panels > 1L) {
-        # Some plot methods override mfrow unless you specify which panel.
-        # So we try plotting each panel explicitly when possible.
-        ok_any <- FALSE
-        for (i in seq_len(n_panels)) {
-          ok <- tryCatch({ plot(diag, var = i); TRUE }, error = function(e) FALSE)
-          ok_any <- ok_any || ok
-        }
-        if (!ok_any) plot(diag)
-      } else {
-        plot(diag)
-      }
-    }, error = function(e) invisible(NULL))
-  }, height = function() {
-    fit <- fit_store()
-    if (is.null(fit)) return(400)
-
-    mod <- get_model(input$model_type)
-    diag <- tryCatch(mod$diagnostics(fit), error = function(e) NULL)
-    if (is.null(diag) || is.character(diag)) return(400)
-
-    if (!is.null(diag$table) && is.matrix(diag$table)) {
-      rn <- rownames(diag$table)
-      n_panels <- nrow(diag$table)
-      if (!is.null(rn) && any(toupper(rn) == "GLOBAL")) n_panels <- n_panels - 1L
-      n_panels <- max(1L, n_panels)
-      return(n_panels * 400)
-    }
-    400
   })
 
-# --- Downloads ---
+  
+  # --- Downloads ---
   output$download_table <- downloadHandler(
     filename = function() paste0("model_table_", Sys.Date(), ".csv"),
     content = function(file) {

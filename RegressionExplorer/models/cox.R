@@ -17,10 +17,12 @@
 .tidy <- function(model) broom::tidy(model, conf.int = FALSE)
 
 .diagnostics <- function(model) {
-  out <- tryCatch({
-    capture.output(print(survival::cox.zph(model)))
-  }, error = function(e) paste("cox.zph failed:", e$message))
-  out
+  # Return the *object* so app.R can both print() and plot() it.
+  # (Keeps app.R generic; no hard-coded cox branching needed.)
+  tryCatch(
+    survival::cox.zph(model),
+    error = function(e) paste("cox.zph failed:", e$message)
+  )
 }
 
 .step <- function(base_fit, lower_form, upper_form, k, direction) {

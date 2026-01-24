@@ -2,34 +2,16 @@
   {
     "id": "linear",
     "label": "Linear (Gaussian)",
-    "time_based": false,
-    "outcome_binary": false,
-    "outcome_categorical": false,
-    "effect_name": "\u03B2",
-    "file": "models/linear.R",
-    "supports_stepwise": true,
-    "step_impl": "stepAIC"
+    "file": "models/linear.R"  
   },
   {
     "id": "logistic",
     "label": "Logistic (Binomial)",
-    "time_based": false,
-    "outcome_binary": true,
-    "outcome_categorical": true,
-    "effect_name": "OR",
-    "file": "models/logistic.R",
-    "supports_stepwise": true,
-    "step_impl": "stats_step"
+    "file": "models/logistic.R"
   },
   {
     "id": "cox",
     "label": "Cox PH (Survival)",
-    "time_based": true,
-    "outcome_binary": true,
-    "outcome_categorical": false,
-    "effect_name": "HR",
-    "file": "models/cox.R",
-    "supports_stepwise": true,
-    "step_impl": "stepAIC"
+    "file": "models/cox.R"
   }
 ]
