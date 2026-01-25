@@ -17,13 +17,26 @@
 .tidy <- function(model) broom::tidy(model, conf.int = FALSE)
 
 .diagnostics <- function(model) {
-  # Return the *object* so app.R can both print() and plot() it.
-  # (Keeps app.R generic; no hard-coded cox branching needed.)
-  tryCatch(
-    survival::cox.zph(model),
-    error = function(e) paste("cox.zph failed:", e$message)
+  z <- survival::cox.zph(model)
+
+  plots <- lapply(seq_len(nrow(z$table)), function(i) {
+    varname <- rownames(z$table)[i]
+    if (toupper(varname) == "GLOBAL") return(NULL)
+
+    list(
+      title = paste("PH test:", varname),
+      draw = function() {
+        plot(z, var = i)
+      }
+    )
+  })
+
+  list(
+    model = z$table,
+    plot  = Filter(Negate(is.null), plots)
   )
 }
+
 
 .step <- function(base_fit, lower_form, upper_form, k, direction) {
   MASS::stepAIC(base_fit,

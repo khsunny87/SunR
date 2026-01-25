@@ -106,10 +106,12 @@ main <- mainPanel(
       
       h5("Coefficients"),
       DTOutput("coef_table"),
-      h5("Model diagnostics / notes"),
-      verbatimTextOutput("model_notes"),
-      h5("Model plot"),
-      plotOutput("model_plot")
+      h5("Model diagnostics"),
+      uiOutput("model_diagnosis")
+
+      #verbatimTextOutput("model_notes"),
+      #h5("Model plot"),
+      #plotOutput("model_plot")
 
     ),
     tabPanel("Saved results",
@@ -799,83 +801,55 @@ output$univ_table <- renderDT({
     ) %>% highlight_sig_rows()
   })
   
-  
-  # --- Diagnostics ---
-  output$model_notes <- renderPrint({
-    fit <- fit_store()
-    if (is.null(fit)) {
-      cat("No model fitted yet.")
-      return(invisible())
+  output$model_diagnosis <- renderUI({
+  fit <- fit_store()
+  if (is.null(fit)) {
+    return(tags$pre("No model fitted yet."))
+  }
+
+  mod <- get_model(input$model_type)
+  diag <- tryCatch(mod$diagnostics(fit), error = function(e) NULL)
+
+  if (is.null(diag)) {
+    return(tags$pre("No diagnostics available."))
+  }
+
+  tagList(
+    # ---- model text ----
+    h5("Model diagnostics"),
+    tags$pre(
+      paste(
+        if (is.character(diag$model)) diag$model else capture.output(print(diag$model)),
+        collapse = "\n"
+      )
+    ),
+
+    # ---- plots ----
+    if (!is.null(diag$plot) && length(diag$plot) > 0) {
+      tagList(
+        h5("Diagnostic plots"),
+        lapply(seq_along(diag$plot), function(i) {
+          local({
+            idx <- i
+            plotname <- paste0("diag_plot_", idx)
+
+            output[[plotname]] <- renderPlot({
+              diag$plot[[idx]]$draw()
+            }, height = 400)
+
+            tagList(
+              if (!is.null(diag$plot[[idx]]$title))
+                tags$strong(diag$plot[[idx]]$title),
+              plotOutput(plotname)
+            )
+          })
+        })
+      )
     }
+  )
+})
 
-    mod <- get_model(input$model_type)
-    diag <- tryCatch(mod$diagnostics(fit), error = function(e) paste("diagnostics failed:", e$message))
 
-    if (is.null(diag)) {
-      cat("No diagnostics available.")
-      return(invisible())
-    }
-
-    if (is.character(diag)) {
-      cat(paste(diag, collapse = "\n"))
-    } else {
-      print(diag)
-    }
-  })
-
-  output$model_plot <- renderPlot({
-    fit <- fit_store()
-    if (is.null(fit)) return(invisible())
-
-    mod <- get_model(input$model_type)
-    diag <- tryCatch(mod$diagnostics(fit), error = function(e) NULL)
-    if (is.null(diag) || is.character(diag)) return(invisible())
-
-    tryCatch({
-      op <- par(no.readonly = TRUE)
-      on.exit(par(op), add = TRUE)
-
-      # If diagnostics has a table matrix (e.g., time-to-event PH test),
-      # draw one panel per row except an optional GLOBAL row.
-      n_panels <- 1L
-      if (!is.null(diag$table) && is.matrix(diag$table)) {
-        rn <- rownames(diag$table)
-        n_panels <- nrow(diag$table)
-        if (!is.null(rn) && any(toupper(rn) == "GLOBAL")) n_panels <- n_panels - 1L
-        n_panels <- max(1L, n_panels)
-      }
-      par(mfrow = c(n_panels, 1))
-
-      if (!is.null(diag$table) && is.matrix(diag$table) && n_panels > 1L) {
-        # Some plot methods override mfrow unless you specify which panel.
-        # So we try plotting each panel explicitly when possible.
-        ok_any <- FALSE
-        for (i in seq_len(n_panels)) {
-          ok <- tryCatch({ plot(diag, var = i); TRUE }, error = function(e) FALSE)
-          ok_any <- ok_any || ok
-        }
-        if (!ok_any) plot(diag)
-      } else {
-        plot(diag)
-      }
-    }, error = function(e) invisible(NULL))
-  }, height = function() {
-    fit <- fit_store()
-    if (is.null(fit)) return(400)
-
-    mod <- get_model(input$model_type)
-    diag <- tryCatch(mod$diagnostics(fit), error = function(e) NULL)
-    if (is.null(diag) || is.character(diag)) return(400)
-
-    if (!is.null(diag$table) && is.matrix(diag$table)) {
-      rn <- rownames(diag$table)
-      n_panels <- nrow(diag$table)
-      if (!is.null(rn) && any(toupper(rn) == "GLOBAL")) n_panels <- n_panels - 1L
-      n_panels <- max(1L, n_panels)
-      return(n_panels * 400)
-    }
-    400
-  })
 
 # --- Downloads ---
   output$download_table <- downloadHandler(
