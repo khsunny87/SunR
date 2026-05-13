@@ -11,6 +11,7 @@ suppressPackageStartupMessages({
   library(purrr)
   library(readr)
   library(ggplot2)
+  library(survival)
 })
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -149,12 +150,18 @@ compute_weights <- function(matchit_obj, estimand = "ATT") {
   )
 }
 
-# DT 행 강조 (|SMD| > 0.1 → 연노랑)
+# DT 행 강조 (우선순위: both > outcome > smd > ok)
 highlight_imbal_rows <- function(dt_widget, flag_col = ".__flag__") {
   DT::formatStyle(
     dt_widget, flag_col, target = "row",
-    backgroundColor = DT::styleEqual(c("ok", "imbal"), c(NA, "lightyellow")),
-    fontWeight      = DT::styleEqual(c("ok", "imbal"), c("normal", "bold"))
+    backgroundColor = DT::styleEqual(
+      c("ok", "smd",         "outcome",  "both"),
+      c(NA,   "lightyellow", "#cce5ff",  "#c3e6cb")
+    ),
+    fontWeight = DT::styleEqual(
+      c("ok",     "smd",  "outcome", "both"),
+      c("normal", "bold", "bold",    "bold")
+    )
   )
 }
 
@@ -167,12 +174,23 @@ sidebar <- sidebarPanel(
   prettySwitch("use_example", "예제 데이터 사용", value = TRUE, status = "info"),
   conditionalPanel(
     condition = "input.use_example == true",
-    helpText("예제: MatchIt::lalonde (직업훈련 프로그램, N=614)")
+    selectInput("example_ds", "예제 데이터 선택",
+                choices = c("lalonde (MatchIt, N=614)" = "lalonde",
+                            "colon (survival, N=1858)" = "colon"),
+                selected = "lalonde")
   ),
   hr(),
   h4("2) 그룹변수"),
   uiOutput("ui_grp"),
-  helpText("0/1 또는 2-레벨 변수만 표시됩니다.")
+  helpText("0/1 또는 2-레벨 변수만 표시됩니다."),
+  hr(),
+  h4("3) 아웃컴 회귀"),
+  selectInput("outcome_type", "회귀 모델",
+              choices = c("(선택 안 함)" = "", "Linear" = "linear",
+                          "Logistic" = "logistic", "Cox" = "cox"),
+              selected = ""),
+  uiOutput("ui_outcome_var"),
+  uiOutput("ui_time_var")
 )
 
 main <- mainPanel(
@@ -234,7 +252,9 @@ main <- mainPanel(
       hr(),
       prettySwitch("drop_na_ps", "Complete-case (결측 행 제거)",
                    value = TRUE, status = "warning"),
-      actionButton("run_ps", "Run Analysis", class = "btn-primary btn-lg", icon = icon("play"))
+      actionButton("run_ps", "Run Analysis", class = "btn-primary btn-lg", icon = icon("play")),
+      br(), br(),
+      verbatimTextOutput("ps_code_display")
     ),
 
     tabPanel(
@@ -266,8 +286,14 @@ server <- function(input, output, session) {
   # ── 데이터 로딩 ──────────────────────────────────────────────────────────────
   data_raw <- reactive({
     if (isTRUE(input$use_example)) {
-      data("lalonde", package = "MatchIt", envir = environment())
-      get("lalonde", envir = environment())
+      ds <- input$example_ds %||% "lalonde"
+      if (ds == "colon") {
+        data("colon", package = "survival", envir = environment())
+        get("colon", envir = environment())
+      } else {
+        data("lalonde", package = "MatchIt", envir = environment())
+        get("lalonde", envir = environment())
+      }
     } else {
       req(input$file)
       tryCatch(readr::read_csv(input$file$datapath, show_col_types = FALSE),
@@ -307,6 +333,53 @@ server <- function(input, output, session) {
     cands <- get_binary_candidates(df)
     if (length(cands) == 0) return(helpText("binary 변수가 없습니다."))
     selectInput("grp_var", "그룹변수 선택", choices = cands, selected = cands[1])
+  })
+
+  # ── 아웃컴 회귀 UI ────────────────────────────────────────────────────────────
+  output$ui_outcome_var <- renderUI({
+    req(nchar(input$outcome_type %||% "") > 0)
+    df <- data_raw(); req(df)
+    vars <- setdiff(names(df), input$grp_var %||% character(0))
+    selectInput("outcome_var", "아웃컴 변수",
+                choices = c("(선택)" = "", vars), selected = "")
+  })
+
+  output$ui_time_var <- renderUI({
+    req(identical(input$outcome_type, "cox"))
+    df <- data_raw(); req(df)
+    exclude  <- c(input$grp_var %||% "", input$outcome_var %||% "")
+    num_vars <- Filter(function(v) is.numeric(df[[v]]), setdiff(names(df), exclude))
+    selectInput("time_var", "시간 변수 (Cox)",
+                choices = c("(선택)" = "", num_vars), selected = "")
+  })
+
+  # ── 아웃컴 단변수 p-value ─────────────────────────────────────────────────────
+  outcome_pvals <- reactive({
+    ot <- input$outcome_type %||% ""
+    ov <- input$outcome_var  %||% ""
+    if (ot == "" || ov == "") return(NULL)
+    df  <- data_raw(); if (is.null(df)) return(NULL)
+    grp <- input$grp_var;     if (is.null(grp)) return(NULL)
+    exclude <- c(grp, ov)
+    if (ot == "cox") {
+      tv <- input$time_var %||% ""
+      if (tv == "") return(NULL)
+      exclude <- c(exclude, tv)
+    }
+    covs <- setdiff(names(df), exclude)
+    setNames(sapply(covs, function(v) {
+      tryCatch({
+        if (ot == "linear") {
+          summary(lm(formula(paste(ov, "~", v)), data = df))$coefficients[2, 4]
+        } else if (ot == "logistic") {
+          summary(glm(formula(paste(ov, "~", v)), data = df,
+                      family = binomial))$coefficients[2, 4]
+        } else {
+          summary(coxph(formula(paste0("Surv(", tv, ",", ov, ")~", v)),
+                        data = df))$coefficients[1, 5]
+        }
+      }, error = function(e) NA_real_)
+    }), covs)
   })
 
   # ── 공변량 선택 상태 ──────────────────────────────────────────────────────────
@@ -350,8 +423,18 @@ server <- function(input, output, session) {
       ))
     }, character(1))
 
-    dt$.__flag__ <- dplyr::case_when(
-      is.na(dt$smd) ~ "ok", dt$smd > 0.1 ~ "imbal", TRUE ~ "ok"
+    # outcome p-value 먼저 계산 (플래그에도 사용)
+    op     <- outcome_pvals()
+    pv_vec <- if (is.null(op)) rep(NA_real_, nrow(dt)) else as.numeric(op[dt$var])
+
+    # 4단계 플래그: both > outcome > smd > ok
+    smd_high <- !is.na(dt$smd) & dt$smd > 0.1
+    out_sig  <- !is.na(pv_vec) & pv_vec < 0.05
+    flag_vals <- dplyr::case_when(
+      smd_high & out_sig ~ "both",
+      out_sig            ~ "outcome",
+      smd_high           ~ "smd",
+      TRUE               ~ "ok"
     )
 
     # 컬럼명에 N= 포함
@@ -370,7 +453,9 @@ server <- function(input, output, session) {
     out[["p-value"]]   <- ifelse(is.na(dt$pval), "",
                                  ifelse(dt$pval < 0.001, "<0.001", sprintf("%.3f", dt$pval)))
     out[["|SMD|"]]     <- ifelse(is.na(dt$smd), NA_real_, round(dt$smd, 3))
-    out[[".__flag__"]] <- dt$.__flag__
+    out[["Outcome p"]] <- ifelse(is.na(pv_vec), "",
+                                 ifelse(pv_vec < 0.001, "<0.001", sprintf("%.3f", pv_vec)))
+    out[[".__flag__"]] <- flag_vals
 
     flag_idx <- which(names(out) == ".__flag__") - 1
 
@@ -425,6 +510,34 @@ server <- function(input, output, session) {
     all_covs <- setdiff(names(df), grp)
     choices  <- c("PS Distribution" = ".__distance__", all_covs)
     updateSelectInput(session, "bal_var", choices = choices, selected = ".__distance__")
+  })
+
+  # ── Method 탭 코드 박스 ───────────────────────────────────────────────────────
+  output$ps_code_display <- renderText({
+    res <- ps_result(); req(res)
+    grp  <- isolate(input$grp_var)
+    covs <- isolate(rv$sel)
+    f_str <- paste0(grp, " ~ ", paste(covs, collapse = " + "))
+    if (isolate(input$ps_method) == "matching") {
+      caliper_val <- isolate(input$caliper)
+      cal_str <- if (caliper_val == 0) "" else paste0(",\n        caliper = ", caliper_val)
+      paste0(
+        "matchit(", f_str, ",\n",
+        "        data = df,\n",
+        "        method = \"", isolate(input$match_method), "\",\n",
+        "        distance = \"", isolate(input$distance), "\",\n",
+        "        ratio = ", isolate(input$ratio), cal_str, ",\n",
+        "        estimand = \"ATT\")"
+      )
+    } else {
+      paste0(
+        "matchit(", f_str, ",\n",
+        "        data = df,\n",
+        "        method = NULL,\n",
+        "        distance = \"", isolate(input$distance_iptw), "\",\n",
+        "        estimand = \"", isolate(input$estimand), "\")"
+      )
+    }
   })
 
   # ── Results 공통 ──────────────────────────────────────────────────────────────
@@ -527,8 +640,11 @@ server <- function(input, output, session) {
     }
 
     # ── 출력 데이터프레임 조립 ──
-    out <- data.frame(Variable = pre$var, Type = pre$type,
-                      check.names = FALSE, stringsAsFactors = FALSE)
+    out <- data.frame(
+      Variable = ifelse(pre$var %in% rv$sel, paste0("✔ ", pre$var), pre$var),
+      Type = pre$type,
+      check.names = FALSE, stringsAsFactors = FALSE
+    )
 
     # Pre-match 컬럼
     pre_overall_col  <- paste0("Overall (N=", n_pre_total, ")")
