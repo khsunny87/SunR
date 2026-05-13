@@ -12,6 +12,8 @@ suppressPackageStartupMessages({
   library(readr)
   library(ggplot2)
   library(survival)
+  library(WeightIt)
+  library(survey)
 })
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -46,21 +48,24 @@ fmt_stat <- function(x, is_normal = NULL) {
   }
 }
 
-# Balance Table용: 가중/비가중 mean±SD 또는 n(%)
+# Balance Table용: survey 패키지 기반 가중 mean±SD 또는 n(%)
 fmt_stat_w <- function(x, w = NULL, is_cont) {
   if (is.null(w)) w <- rep(1, length(x))
   valid <- !is.na(x) & !is.na(w) & w > 0
   x <- x[valid]; w <- w[valid]
   if (length(x) == 0) return("")
   if (is_cont) {
-    wm  <- weighted.mean(x, w)
-    wsd <- sqrt(sum(w * (x - wm)^2) / sum(w))
+    d   <- survey::svydesign(ids = ~1, data = data.frame(x = x), weights = ~w)
+    wm  <- as.numeric(survey::svymean(~x, d))
+    wsd <- sqrt(as.numeric(survey::svyvar(~x, d)))
     sprintf("%.1f ± %.1f", wm, wsd)
   } else {
-    ux <- as.character(sort(unique(x)))
+    xf <- as.factor(x)
+    d  <- survey::svydesign(ids = ~1, data = data.frame(x = xf), weights = ~w)
+    props <- as.numeric(survey::svymean(~xf, d)) * 100
+    ux <- levels(xf)
     tab_n <- table(x)
-    tab_p <- sapply(ux, function(lv) sum(w[as.character(x) == lv]) / sum(w) * 100)
-    paste(paste0(ux, ": ", tab_n[ux], " (", round(tab_p, 1), "%)"), collapse = "; ")
+    paste(paste0(ux, ": ", tab_n[ux], " (", round(props, 1), "%)"), collapse = "; ")
   }
 }
 
@@ -127,8 +132,20 @@ compute_balance_stats <- function(df, grp_var, covs, weights = NULL) {
       grp_levels
     )
     smd_val <- tryCatch({
-      if (is.null(weights)) abs(smd::smd(x = xc, g = factor(gc), na.rm = FALSE)$estimate)
-      else                   abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = FALSE)$estimate)
+      if (is.null(weights)) {
+        abs(smd::smd(x = xc, g = factor(gc), na.rm = FALSE)$estimate)
+      } else if (is_cont) {
+        g1 <- gc == grp_levels[1]; g2 <- gc == grp_levels[2]
+        calc_grp <- function(vals, ws) {
+          d <- survey::svydesign(ids = ~1, data = data.frame(x = vals), weights = ~ws)
+          list(m = as.numeric(survey::svymean(~x, d)),
+               v = as.numeric(survey::svyvar(~x, d)))
+        }
+        s1 <- calc_grp(xc[g1], wc[g1]); s2 <- calc_grp(xc[g2], wc[g2])
+        abs(s1$m - s2$m) / sqrt((s1$v + s2$v) / 2)
+      } else {
+        abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = FALSE)$estimate)
+      }
     }, error = function(e) NA_real_)
 
     row <- tibble::tibble(var = v, type = if (is_cont) "Cont." else "Cat.",
@@ -138,16 +155,10 @@ compute_balance_stats <- function(df, grp_var, covs, weights = NULL) {
   })
 }
 
-# IPTW 가중치 계산
-compute_weights <- function(matchit_obj, estimand = "ATT") {
-  ps      <- matchit_obj$distance
-  trt_var <- as.character(formula(matchit_obj)[[2]])
-  trt     <- as.integer(as.character(matchit_obj$model$data[[trt_var]]))
-  switch(estimand,
-    ATT = ifelse(trt == 1, 1,      ps / (1 - ps)),
-    ATE = ifelse(trt == 1, 1 / ps, 1 / (1 - ps)),
-    ATC = ifelse(trt == 0, 1,      (1 - ps) / ps)
-  )
+# IPTW weight trimming (winsorize at pct, IPTW.R 참고)
+apply_trim <- function(w, trim = TRUE, pct = 0.99) {
+  if (!trim) return(w)
+  pmin(w, quantile(w, pct, na.rm = TRUE))
 }
 
 # DT 행 강조 (우선순위: both > outcome > smd > ok)
@@ -245,9 +256,14 @@ main <- mainPanel(
         h5("IPTW 옵션"),
         prettyRadioButtons("estimand", "Estimand",
                            choices = c("ATT", "ATE", "ATC"),
-                           selected = "ATT", inline = TRUE, status = "info"),
-        selectInput("distance_iptw", "Distance metric",
-                    choices = c("logit", "probit", "linear.logit", "gam"), selected = "logit")
+                           selected = "ATE", inline = TRUE, status = "info"),
+        selectInput("weightit_method", "WeightIt Method",
+                    choices = c("PS (Logistic)" = "ps",
+                                "CBPS"          = "cbps",
+                                "Entropy Bal."  = "ebal"),
+                    selected = "ps"),
+        prettySwitch("stabilize_weights", "Stabilized weights", value = FALSE, status = "info"),
+        prettySwitch("trim_weights", "Weight trimming (99th pct)", value = FALSE, status = "warning")
       ),
       hr(),
       prettySwitch("drop_na_ps", "Complete-case (결측 행 제거)",
@@ -497,8 +513,9 @@ server <- function(input, output, session) {
       )
     } else {
       tryCatch(
-        MatchIt::matchit(f, data = df, method = NULL,
-                         distance = input$distance_iptw, estimand = input$estimand),
+        WeightIt::weightit(f, data = df, method = input$weightit_method,
+                           estimand = input$estimand,
+                           stabilize = isTRUE(input$stabilize_weights)),
         error = function(e) { showNotification(paste("IPTW 실패:", e$message), type = "error"); NULL }
       )
     }
@@ -530,12 +547,20 @@ server <- function(input, output, session) {
         "        estimand = \"ATT\")"
       )
     } else {
+      stab_str <- if (isTRUE(isolate(input$stabilize_weights)))
+        ",\n         stabilize = TRUE" else ""
+      trim_str <- if (isTRUE(isolate(input$trim_weights))) paste0(
+        "\n# Weight trimming (99th pct winsorization)\n",
+        "w <- res$weights\n",
+        "w <- pmin(w, quantile(w, 0.99))"
+      ) else ""
       paste0(
-        "matchit(", f_str, ",\n",
-        "        data = df,\n",
-        "        method = NULL,\n",
-        "        distance = \"", isolate(input$distance_iptw), "\",\n",
-        "        estimand = \"", isolate(input$estimand), "\")"
+        "res <- weightit(", f_str, ",\n",
+        "         data = df,\n",
+        "         method = \"", isolate(input$weightit_method), "\",\n",
+        "         estimand = \"", isolate(input$estimand), "\"",
+        stab_str, ")",
+        trim_str
       )
     }
   })
@@ -565,8 +590,9 @@ server <- function(input, output, session) {
                         threshold = 0.1, abs = TRUE, var.order = "unadjusted",
                         title = "Love Plot — Matching") + vline02
     } else {
-      w <- compute_weights(res, input$estimand)
-      cobalt::love.plot(res, addl = addl_form, data = df, weights = w,
+      res_show <- res
+      res_show$weights <- apply_trim(res$weights, isTRUE(input$trim_weights))
+      cobalt::love.plot(res_show, addl = addl_form, data = df,
                         threshold = 0.1, abs = TRUE, var.order = "unadjusted",
                         title = paste0("Love Plot — IPTW (", input$estimand, ")")) + vline02
     }
@@ -578,24 +604,35 @@ server <- function(input, output, session) {
     df  <- df_for_display()
 
     if (input$bal_var == ".__distance__") {
-      # PS(propensity score) 분포
+      # PS 분포
       if (input$ps_method == "matching") {
         cobalt::bal.plot(res, var.name = "distance", which = "both")
       } else {
-        w <- compute_weights(res, input$estimand)
-        cobalt::bal.plot(res, var.name = "distance", which = "both", weights = w)
+        w_trim <- apply_trim(res$weights, isTRUE(input$trim_weights))
+        ps_df <- data.frame(ps = res$ps, group = factor(df[[input$grp_var]]), w = w_trim)
+        df_pre  <- transform(ps_df, weight = 1,   panel = "Unadjusted Sample")
+        df_post <- transform(ps_df, weight = w,   panel = "Adjusted Sample (IPTW)")
+        plot_df <- rbind(df_pre, df_post)
+        plot_df$panel <- factor(plot_df$panel,
+                                levels = c("Unadjusted Sample", "Adjusted Sample (IPTW)"))
+        ggplot2::ggplot(plot_df, ggplot2::aes(x = ps, weight = weight, fill = group)) +
+          ggplot2::geom_density(alpha = 0.4) +
+          ggplot2::facet_wrap(~panel) +
+          ggplot2::labs(x = "Propensity Score", y = "Density",
+                        title = 'Distributional Balance for "prop.score"') +
+          ggplot2::theme_bw()
       }
     } else {
-      # PS 공식 미포함 변수는 addl로 전달
-      needs_addl  <- !(input$bal_var %in% rv$sel)
+      needs_addl   <- !(input$bal_var %in% rv$sel)
       addl_for_bal <- if (needs_addl) reformulate(input$bal_var) else NULL
       if (input$ps_method == "matching") {
         cobalt::bal.plot(res, var.name = input$bal_var, which = "both",
                          data = df, addl = addl_for_bal)
       } else {
-        w <- compute_weights(res, input$estimand)
-        cobalt::bal.plot(res, var.name = input$bal_var, which = "both",
-                         weights = w, data = df, addl = addl_for_bal)
+        res_show <- res
+        res_show$weights <- apply_trim(res$weights, isTRUE(input$trim_weights))
+        cobalt::bal.plot(res_show, var.name = input$bal_var, which = "both",
+                         data = df, addl = addl_for_bal)
       }
     }
   })
@@ -628,14 +665,13 @@ server <- function(input, output, session) {
       )
       post <- compute_balance_stats(matched_df, grp, all_covs, weights = matched_df$weights)
     } else {
-      w       <- compute_weights(res, input$estimand)
-      df_iptw <- res$model$data
-      df_iptw[[grp]] <- as.integer(as.factor(df_iptw[[grp]])) - 1L
-      n_post_total <- nrow(df_iptw)
-      n_post_grp <- setNames(
-        sapply(grp_levels, function(gl) sum(df_iptw[[grp]] == as.integer(gl))),
-        grp_levels
-      )
+      w       <- apply_trim(res$weights, isTRUE(input$trim_weights))
+      df_iptw <- df
+      # Σw — svyCreateTableOne의 n과 동일
+      wsum_total <- round(sum(w), 1)
+      wsum_grp   <- setNames(sapply(grp_levels, function(gl) {
+        round(sum(w[df_iptw[[grp]] == as.integer(gl)]), 1)
+      }), grp_levels)
       post <- compute_balance_stats(df_iptw, grp, all_covs, weights = w)
     }
 
@@ -646,21 +682,32 @@ server <- function(input, output, session) {
       check.names = FALSE, stringsAsFactors = FALSE
     )
 
-    # Pre-match 컬럼
+    is_iptw <- input$ps_method != "matching"
+
+    # Pre 컬럼 (Matching: "Pre |SMD|", IPTW: "Unadj. |SMD|")
     pre_overall_col  <- paste0("Overall (N=", n_pre_total, ")")
     out[[pre_overall_col]] <- pre$overall
     for (gl in grp_levels) {
       out[[paste0(gl, " (N=", n_pre_grp[[gl]], ")")]] <- pre[[paste0("grp_", gl)]]
     }
-    out[["Pre |SMD|"]] <- ifelse(is.na(pre$smd), "", sprintf("%.3f", pre$smd))
+    pre_smd_col <- if (is_iptw) "Unadj. |SMD|" else "Pre |SMD|"
+    out[[pre_smd_col]] <- ifelse(is.na(pre$smd), "", sprintf("%.3f", pre$smd))
 
-    # Post-match 컬럼 (굵은 구분선은 첫 번째 post 컬럼에 CSS 클래스로)
-    post_overall_col <- paste0("Overall (N=", n_post_total, ")")
+    # Post 컬럼 — Matching: N=, IPTW: ESS=
+    post_overall_col <- if (is_iptw)
+      paste0("Overall (Σw=", wsum_total, ")")
+    else
+      paste0("Overall (N=", n_post_total, ")")
     out[[post_overall_col]] <- post$overall
     for (gl in grp_levels) {
-      out[[paste0(gl, " (N=", n_post_grp[[gl]], ")")]] <- post[[paste0("grp_", gl)]]
+      post_grp_label <- if (is_iptw)
+        paste0(gl, " (Σw=", wsum_grp[[gl]], ")")
+      else
+        paste0(gl, " (N=", n_post_grp[[gl]], ")")
+      out[[post_grp_label]] <- post[[paste0("grp_", gl)]]
     }
-    out[["Post |SMD|"]] <- ifelse(is.na(post$smd), "", sprintf("%.3f", post$smd))
+    post_smd_col <- if (is_iptw) "IPTW |SMD|" else "Post |SMD|"
+    out[[post_smd_col]] <- ifelse(is.na(post$smd), "", sprintf("%.3f", post$smd))
 
     # SMD 강조 플래그 (Post |SMD| > 0.1 → 연노랑)
     out[[".__post_flag__"]] <- ifelse(is.na(post$smd) | post$smd <= 0.1, "ok", "imbal")
