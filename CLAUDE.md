@@ -2,58 +2,35 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Overview
+## 개요
 
-SunR is a collection of R tools for clinical/medical research statistics. It includes two Shiny web applications and several utility R scripts for survival analysis, regression, forest plots, CONSORT diagrams, and IPTW.
+SunR은 임상/의학 연구 통계를 위한 R 도구 모음입니다. Shiny 웹 앱 3개와 생존분석·회귀분석·산림 플롯·CONSORT 다이어그램·IPTW 유틸리티 스크립트로 구성됩니다.
 
-## Package Management
+## 패키지 관리
 
-renv is used for dependency management. The `.Rprofile` auto-activates renv.
-
-```r
-renv::restore()   # restore all packages from renv.lock
-renv::snapshot()  # update renv.lock after adding packages
-```
-
-R version: 4.5.2
-
-## Running the Shiny Apps
+`renv`로 의존성 관리. `.Rprofile`이 자동 활성화.
 
 ```r
-shiny::runApp("RegressionExplorer")   # Interactive Regression Workbench
-shiny::runApp("Table_maker")          # Variable Picker for Publication Tables
+renv::restore()   # renv.lock에서 패키지 복원
+renv::snapshot()  # 패키지 추가 후 renv.lock 갱신
 ```
 
-## Architecture
+R 버전: 4.5.2
 
-### RegressionExplorer/
+## Shiny 앱
 
-A modular Shiny app for interactive regression analysis with univariable screening, VIF diagnosis, and stepwise selection.
+| 앱 | 설명 | 세부 가이드 |
+|----|------|------------|
+| `RegressionExplorer` | 인터랙티브 회귀분석 워크벤치 | [RegressionExplorer/CLAUDE.md](RegressionExplorer/CLAUDE.md) |
+| `Table_maker` | 출판용 기술통계표 변수 선택기 | [Table_maker/CLAUDE.md](Table_maker/CLAUDE.md) |
+| `PS_Explorer` | 성향점수 분석 (매칭 + IPTW) ← 주요 개발 중 | [PS_Explorer/CLAUDE.md](PS_Explorer/CLAUDE.md) |
 
-**Extension pattern** — adding a new regression model:
-1. Create `RegressionExplorer/models/<id>.R` exporting a `.model_<id>` list with these required fields:
-   - `build_formula(input, rv)` → formula
-   - `fit(formula, data, input)` → model object
-   - `tidy(model)` → broom-style tibble
-   - `diagnostics(model)` → `list(model=..., plot=list(list(title=..., draw=function()...)))`
-   - `step(base_fit, lower_form, upper_form, k, direction)` → stepped model
-   - `id`, `label`, `time_based`, `effect_name`, `supports_step`, `step_impl`
-2. Add an entry to `RegressionExplorer/settings.json`.
+## 유틸리티 스크립트
 
-`model_registry.R` loads `settings.json`, `sys.source()`s each model file into `ModelRegistry` env, and provides `get_model(id)` and `run_stepwise()`.
-
-`app.R` reactive state: `rv$sel` (selected covariates), `rv$force` (force-in covariates), `fit_store` (fitted model). Checkbox events (`sel_changed`, `force_changed`) come from inline JS in the DT table. Significant rows (p < 0.05) are highlighted yellow/red via `highlight_sig_rows()`.
-
-### Table_maker/
-
-Shiny app that wraps `gtsummary::tbl_summary()` with an interactive variable picker. Normality is auto-detected via Shapiro-Wilk; continuous variables use mean±SD or median(IQR) accordingly, categorical variables use chi-square or Wilcoxon tests. State (data + selections) can be saved/loaded as JSON.
-
-### Utility Scripts
-
-| File | Purpose |
-|------|---------|
-| `Sun_Survival.R` | `Get_KM2()` for KM curves, `Get_CMP()` for competing risks, `UV_Cox()` / `MV_Cox()` for Cox regression pipelines |
-| `Sun_forest.R` | `Forest_df(model)` extracts broom tidy output into forest-plot-ready data frame; `Plot_forest(plot_df)` renders with ggplot2 |
-| `Sun_CONSORT.R` | DiagrammeR-based CONSORT flow diagrams via grid node/edge helpers |
-| `IPTW.R` | Propensity score IPTW workflow using `MatchIt` + `survey` + `gtsummary` with custom SMD statistic |
-| `euroscore.R` | EuroSCORE II cardiac surgery risk calculation |
+| 파일 | 역할 |
+|------|------|
+| `Sun_Survival.R` | `Get_KM2()` KM 곡선, `Get_CMP()` 경쟁위험, `UV_Cox()`/`MV_Cox()` Cox 회귀 파이프라인 |
+| `Sun_forest.R` | `Forest_df(model)` broom tidy → 산림플롯 데이터프레임; `Plot_forest(plot_df)` ggplot2 렌더링 |
+| `Sun_CONSORT.R` | DiagrammeR 기반 CONSORT 흐름도 (그리드 노드/엣지 헬퍼) |
+| `IPTW.R` | 참조용 IPTW 워크플로 — `WeightIt` + `survey` + `gtsummary` 수동 구현 예시 |
+| `euroscore.R` | EuroSCORE II 심장수술 위험도 계산 |

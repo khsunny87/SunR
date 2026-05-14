@@ -245,6 +245,9 @@ main <- mainPanel(
       conditionalPanel(
         condition = "input.ps_method == 'matching'",
         h5("Matching 옵션"),
+        prettyRadioButtons("match_estimand", "Estimand",
+                           choices = c("ATT", "ATE", "ATC"),
+                           selected = "ATT", inline = TRUE, status = "info"),
         selectInput("match_method", "Method",
                     choices = c("nearest", "optimal", "full"), selected = "nearest"),
         uiOutput("ui_ratio"),
@@ -523,7 +526,7 @@ server <- function(input, output, session) {
       tryCatch(
         MatchIt::matchit(f, data = df, method = input$match_method,
                          distance = input$distance, ratio = actual_ratio,
-                         caliper = caliper_val, estimand = "ATT"),
+                         caliper = caliper_val, estimand = input$match_estimand),
         error = function(e) { showNotification(paste("Matching 실패:", e$message), type = "error"); NULL }
       )
     } else {
@@ -563,7 +566,7 @@ server <- function(input, output, session) {
         "        method = \"", isolate(input$match_method), "\",\n",
         "        distance = \"", isolate(input$distance), "\",\n",
         "        ratio = ", ratio_str, cal_str, ",\n",
-        "        estimand = \"ATT\")"
+        "        estimand = \"", isolate(input$match_estimand), "\")"
       )
     } else {
       stab_str <- if (isTRUE(isolate(input$stabilize_weights)))
