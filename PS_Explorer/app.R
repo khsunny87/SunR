@@ -93,8 +93,9 @@ compute_var_table <- function(df, grp_var) {
     pval <- tryCatch({
       complete <- !is.na(x) & !is.na(grp_vals)
       xc <- x[complete]; gc <- grp_vals[complete]
-      if (length(unique(gc)) < 2) return(NA_real_)
-      if (is_cont) {
+      if (length(unique(gc)) < 2) {
+        NA_real_
+      } else if (is_cont) {
         if (isTRUE(is_normal)) t.test(xc ~ gc)$p.value
         else wilcox.test(xc ~ gc, exact = FALSE)$p.value
       } else {
@@ -246,7 +247,8 @@ main <- mainPanel(
         h5("Matching 옵션"),
         selectInput("match_method", "Method",
                     choices = c("nearest", "optimal", "full"), selected = "nearest"),
-        numericInput("ratio",   "Ratio (k:1)", value = 1, min = 1, max = 10, step = 1),
+        uiOutput("ui_ratio"),
+        prettySwitch("ratio_all", "1:N 매칭 (전체)", value = FALSE, status = "primary"),
         numericInput("caliper", "Caliper (SD 단위, 0 = 없음)", value = 0.2, min = 0, step = 0.05),
         selectInput("distance", "Distance metric",
                     choices = c("logit", "probit", "linear.logit", "gam"), selected = "logit")
@@ -398,6 +400,15 @@ server <- function(input, output, session) {
     }), covs)
   })
 
+  # ── Matching ratio UI (1:N 체크시 비활성화) ──────────────────────────────────
+  output$ui_ratio <- renderUI({
+    disabled <- isTRUE(input$ratio_all)
+    style    <- if (disabled) "opacity:0.4; pointer-events:none;" else ""
+    val      <- isolate(input$ratio) %||% 1
+    div(style = style,
+        numericInput("ratio", "Ratio (k:1)", value = val, min = 1, max = 10, step = 1))
+  })
+
   # ── 공변량 선택 상태 ──────────────────────────────────────────────────────────
   rv <- reactiveValues(sel = character(0))
 
@@ -479,7 +490,7 @@ server <- function(input, output, session) {
       out,
       escape = FALSE, selection = "none", rownames = FALSE,
       options = list(
-        scrollX = TRUE, pageLength = 25,
+        scrollX = TRUE, pageLength = 25, stateSave = TRUE,
         columnDefs = list(list(visible = FALSE, targets = flag_idx))
       ),
       callback = DT::JS("
@@ -504,10 +515,14 @@ server <- function(input, output, session) {
     df[[grp]] <- as.integer(as.factor(df[[grp]])) - 1L
     f <- reformulate(covs, response = grp)
     if (input$ps_method == "matching") {
-      caliper_val <- if (input$caliper == 0) NULL else input$caliper
+      caliper_val  <- if (input$caliper == 0) NULL else input$caliper
+      actual_ratio <- if (isTRUE(input$ratio_all)) {
+        n_ctrl <- sum(df[[grp]] == 0); n_trt <- sum(df[[grp]] == 1)
+        as.integer(max(1L, floor(n_ctrl / n_trt)))
+      } else as.integer(input$ratio)
       tryCatch(
         MatchIt::matchit(f, data = df, method = input$match_method,
-                         distance = input$distance, ratio = as.integer(input$ratio),
+                         distance = input$distance, ratio = actual_ratio,
                          caliper = caliper_val, estimand = "ATT"),
         error = function(e) { showNotification(paste("Matching 실패:", e$message), type = "error"); NULL }
       )
@@ -537,13 +552,17 @@ server <- function(input, output, session) {
     f_str <- paste0(grp, " ~ ", paste(covs, collapse = " + "))
     if (isolate(input$ps_method) == "matching") {
       caliper_val <- isolate(input$caliper)
-      cal_str <- if (caliper_val == 0) "" else paste0(",\n        caliper = ", caliper_val)
+      cal_str   <- if (caliper_val == 0) "" else paste0(",\n        caliper = ", caliper_val)
+      ratio_str <- if (isTRUE(isolate(input$ratio_all)))
+        "floor(n_ctrl / n_trt)  # 1:N 전체매칭"
+      else
+        as.character(isolate(input$ratio))
       paste0(
         "matchit(", f_str, ",\n",
         "        data = df,\n",
         "        method = \"", isolate(input$match_method), "\",\n",
         "        distance = \"", isolate(input$distance), "\",\n",
-        "        ratio = ", isolate(input$ratio), cal_str, ",\n",
+        "        ratio = ", ratio_str, cal_str, ",\n",
         "        estimand = \"ATT\")"
       )
     } else {
