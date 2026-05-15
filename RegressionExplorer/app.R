@@ -21,6 +21,11 @@ options(shiny.maxRequestSize = 100 * 1024^2)
 
 source("model_registry.R")
 
+get_n <- function(fit) {
+  if (inherits(fit, "coxph")) as.integer(fit$n)
+  else as.integer(stats::nobs(fit))
+}
+
 .settings <- load_model_settings("settings.json")
 register_models(.settings)
 
@@ -73,6 +78,7 @@ main <- mainPanel(
              DTOutput("data_preview")),
     tabPanel("Variable selection",
              helpText("Each candidate covariate is fit in a univariable model with the chosen outcome."),
+             uiOutput("outcome_summary"),
              DTOutput("univ_table")),
     tabPanel("Diagnosis",
              helpText("Multicollinearity check among currently selected covariates (rv$sel + rv$force)."),
@@ -397,7 +403,7 @@ if (input$model_type == "cox" &&
       # 성공 결과 반환
       tibble::tibble(
         var = v, 
-        N = as.integer(stats::nobs(fit)), 
+        N = get_n(fit),
         effect = eff_val, 
         se = target$std.error, 
         p = target$p.value, 
@@ -408,6 +414,27 @@ if (input$model_type == "cox" &&
     
     # 리스트 합치기
     dplyr::bind_rows(res)
+  })
+
+  output$outcome_summary <- renderUI({
+    df <- data_ex(); req(!is.null(df))
+    if (input$model_type == "cox") {
+      req(input$event_col, input$event_col %in% names(df))
+      ev <- df[[input$event_col]]
+      if (isTRUE(input$nonzero_event)) ev <- as.integer(ev != 0)
+      ev <- ev[!is.na(ev)]
+      n1 <- sum(ev == 1); n0 <- sum(ev == 0)
+      tags$p(tags$b("사망자: "), n1, "명  |  ", tags$b("생존자: "), n0, "명",
+             style = "margin: 4px 0 8px 0; color: #333;")
+    } else if (input$model_type == "logistic") {
+      req(input$outcome, input$outcome %in% names(df))
+      ov <- df[[input$outcome]]; ov <- ov[!is.na(ov)]
+      n1 <- sum(ov == 1); n0 <- sum(ov == 0)
+      tags$p(tags$b("이벤트(1): "), n1, "명  |  ", tags$b("비이벤트(0): "), n0, "명",
+             style = "margin: 4px 0 8px 0; color: #333;")
+    } else {
+      NULL
+    }
   })
 
 output$univ_table <- renderDT({
@@ -627,7 +654,7 @@ output$univ_table <- renderDT({
     if (is.null(fit)) return(tibble::tibble()) # 모델 없으면 렌더 중단
     
     # 관측치 N
-    n_obs <- tryCatch(as.integer(stats::nobs(fit)), error = function(e) NA_integer_)
+    n_obs <- tryCatch(get_n(fit), error = function(e) NA_integer_)
 
     mod <- get_model(input$model_type)
 # tidy 안전 호출
