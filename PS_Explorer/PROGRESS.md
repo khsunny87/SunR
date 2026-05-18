@@ -37,9 +37,20 @@
 - `MatchIt::matchit(..., estimand = input$match_estimand)` 및 코드박스에도 동적 반영
 - UI 위치: Matching/IPTW 모두 섹션 h5 바로 아래 Estimand 라디오버튼으로 통일
 
-### Variable Selection DT pageLength 리셋 버그 수정
-- **문제**: 변수 체크 시 `rv$sel` 변경 → `renderDT` 전체 재실행 → pageLength 25로 초기화
-- **해결**: `datatable options`에 `stateSave = TRUE` 추가 (브라우저 localStorage에 상태 저장)
+### Variable Selection DT 페이지/pageLength 초기화 버그 수정 (2차)
+- **문제**: show를 50/100으로 변경하고 2페이지에서 체크박스 클릭 시 pageLength 25 / 1페이지로 초기화
+- **원인**: `renderDT` 내 `sel_now <- rv$sel` 가 `rv$sel` 을 reactive 의존성으로 등록 → 체크박스 클릭마다 DT 인스턴스 소멸·재생성 (`stateSave` localStorage 복원 불안정)
+- **해결**: `sel_now <- isolate(rv$sel)` 로 의존성 차단 — 체크박스 시각 상태는 클라이언트 JS에서 관리하므로 서버 재렌더 불필요
+
+### Balance Table logical 그룹변수 에러 수정
+- **문제**: 그룹 변수가 logical(TRUE/FALSE) 타입이면 Balance Table에서 "Error: [object Object]"
+- **원인**: `compute_balance_stats`가 grp_var를 logical로 받으면 `grp_FALSE`/`grp_TRUE` 컬럼 생성, 외부 조립 코드는 `grp_0`/`grp_1` 접근 → NULL → DT 에러
+- **해결**: `output$bal_tbl` 진입 시 `if (is.logical(df[[grp]])) df[[grp]] <- as.integer(df[[grp]])` 로 0/1 정규화
+
+### fmt_stat_w 단일 레벨 factor 에러 수정
+- **문제**: 매칭 후 한 그룹에 범주형 변수 값이 하나만 남으면 `survey::svymean` → "contrasts can be applied only to factors with 2 or more levels" 에러
+- **원인**: 1레벨 factor를 `survey::svymean(~xf, d)` 에 전달 시 `model.matrix` 에서 에러
+- **해결**: `fmt_stat_w` 내 `nlevels(xf) < 2` 체크 → 단순 카운트 + "(100%)" 표시로 분기
 
 ---
 

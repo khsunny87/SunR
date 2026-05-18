@@ -61,11 +61,15 @@ fmt_stat_w <- function(x, w = NULL, is_cont) {
     sprintf("%.1f ± %.1f", wm, wsd)
   } else {
     xf <- as.factor(x)
-    d  <- survey::svydesign(ids = ~1, data = data.frame(x = xf), weights = ~w)
-    props <- as.numeric(survey::svymean(~xf, d)) * 100
     ux <- levels(xf)
     tab_n <- table(x)
-    paste(paste0(ux, ": ", tab_n[ux], " (", round(props, 1), "%)"), collapse = "; ")
+    if (length(ux) < 2) {
+      paste0(ux, ": ", tab_n[ux], " (100%)")
+    } else {
+      d     <- survey::svydesign(ids = ~1, data = data.frame(x = xf), weights = ~w)
+      props <- as.numeric(survey::svymean(~xf, d)) * 100
+      paste(paste0(ux, ": ", tab_n[ux], " (", round(props, 1), "%)"), collapse = "; ")
+    }
   }
 }
 
@@ -436,7 +440,7 @@ server <- function(input, output, session) {
     df         <- data_raw()
     grp_vals   <- df[[grp]]
     grp_levels <- as.character(sort(unique(na.omit(grp_vals))))
-    sel_now    <- rv$sel
+    sel_now    <- isolate(rv$sel)
 
     # 그룹별 N 계산
     n_total <- nrow(df)
@@ -664,6 +668,7 @@ server <- function(input, output, session) {
     res  <- ps_result(); req(res)
     df   <- df_for_display(); grp <- input$grp_var
     req(length(rv$sel) >= 1)
+    if (is.logical(df[[grp]])) df[[grp]] <- as.integer(df[[grp]])
     all_covs   <- setdiff(names(df), grp)   # PS 포함/미포함 전체 공변량
     grp_levels <- c("0", "1")
 

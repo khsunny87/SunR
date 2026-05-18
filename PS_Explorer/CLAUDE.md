@@ -119,9 +119,32 @@ if (length(unique(gc)) < 2) {
 
 `.__flag__` 숨김 컬럼 기반 4단계: `both`(초록) > `outcome`(파란) > `smd`(노란) > `ok`(없음)
 
-### DT pageLength 유지
+### DT pageLength / 페이지 유지
 
-`datatable options`에 `stateSave = TRUE` 필수 — 없으면 변수 체크마다 pageLength 25로 초기화됨.
+`renderDT` 내부에서 `rv$sel` 읽을 때 반드시 `isolate(rv$sel)` 사용.
+- `sel_now <- rv$sel` → DT가 체크박스 클릭마다 재실행되어 page/pageLength 초기화
+- `sel_now <- isolate(rv$sel)` → 의존성 차단, 클라이언트 JS가 체크박스 상태 관리
+
+---
+
+### Balance Table 그룹변수 타입 주의
+
+`output$bal_tbl` 진입부에서 그룹 변수가 logical이면 반드시 0/1 정규화:
+```r
+if (is.logical(df[[grp]])) df[[grp]] <- as.integer(df[[grp]])
+```
+그렇지 않으면 `compute_balance_stats`가 `grp_FALSE`/`grp_TRUE` 컬럼 생성 → 조립 코드(`grp_0`/`grp_1` 접근) 불일치로 DT 에러.
+
+### fmt_stat_w — 단일 레벨 factor 처리
+
+매칭 후 한 그룹에 범주형 변수 값이 하나만 남는 경우, `survey::svymean` 호출 전 레벨 수 확인 필수:
+```r
+if (length(levels(xf)) < 2) {
+  paste0(levels(xf), ": ", tab_n[levels(xf)], " (100%)")
+} else {
+  # survey::svymean 정상 호출
+}
+```
 
 ---
 
