@@ -2,21 +2,21 @@
   "mode": "matching",
   "treat": "DCD",
   "estimand": "ATT",
-  "smd_cutoff": 0.1,
+  "smd_cutoff": 0.15,
   "best_config": {
-    "covariates": ["single_lung", "Age", "Male", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_Male", "DON_smoking20", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance", "Dx_OB", "INIT_single_lung", "Tx_interal", "DON_Race_White", "Race_White"],
+    "covariates": ["single_lung", "Age", "Male", "Height", "Weight", "BMI", "Diabetes", "Smoking", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_Male", "DON_HTN", "DON_Height", "DON_PFR", "DON_Distance", "Dx_OB", "Tx_interal", "DON_Race_White", "Race_White"],
     "caliper": 0,
-    "ratio": 4,
+    "ratio": 2,
     "method": "nearest",
-    "distance": "probit",
-    "reasoning": "Probit is very close: only Creatinine at 0.1056. Try ratio 4 with probit — slightly larger ratio may average out Creatinine while keeping others well balanced."
+    "distance": "logit",
+    "reasoning": "Caliper isn't the binding constraint — the 13 unmatched treated likely lack any control matches due to missingness in complete-case analysis. Try no caliper (0) to see if more treated can be matched."
   },
   "result_summary": {
     "balanced": true,
-    "matched_n": 53,
-    "effective_n": 53,
-    "matching_rate": 0.791,
-    "max_smd": 0.0497,
-    "n_iterations": 25
+    "matched_n": 55,
+    "effective_n": 55,
+    "matching_rate": 0.8209,
+    "max_smd": 0.1342,
+    "n_iterations": 10
   }
 }
