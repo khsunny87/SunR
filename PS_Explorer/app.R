@@ -501,11 +501,34 @@ server <- function(input, output, session) {
         columnDefs = list(list(visible = FALSE, targets = flag_idx))
       ),
       callback = DT::JS("
+        var selectedVars = null;
+
+        table.on('draw.dt', function() {
+          if (selectedVars === null) {
+            selectedVars = [];
+            $('input.selChk:checked', table.table().container()).each(function() {
+              selectedVars.push($(this).attr('id').replace('sel_', ''));
+            });
+          } else {
+            $('input.selChk', table.table().container()).each(function() {
+              var v = $(this).attr('id').replace('sel_', '');
+              $(this).prop('checked', selectedVars.indexOf(v) >= 0);
+            });
+          }
+        });
+
         table.on('change', 'input.selChk', function() {
           var id = $(this).attr('id');
           var v  = id.replace('sel_','');
+          var checked = $(this).is(':checked');
+          if (selectedVars === null) selectedVars = [];
+          if (checked) {
+            if (selectedVars.indexOf(v) < 0) selectedVars.push(v);
+          } else {
+            selectedVars = selectedVars.filter(function(x) { return x !== v; });
+          }
           Shiny.setInputValue('sel_changed',
-            {var: v, checked: $(this).is(':checked'), nonce: Math.random()},
+            {var: v, checked: checked, nonce: Math.random()},
             {priority: 'event'});
         });
       ")
@@ -695,7 +718,6 @@ server <- function(input, output, session) {
       w       <- apply_trim(res$weights, isTRUE(input$trim_weights))
       df_iptw <- df
       # Σw — svyCreateTableOne의 n과 동일
-      wsum_total <- round(sum(w), 1)
       wsum_grp   <- setNames(sapply(grp_levels, function(gl) {
         round(sum(w[df_iptw[[grp]] == as.integer(gl)]), 1)
       }), grp_levels)
@@ -720,17 +742,12 @@ server <- function(input, output, session) {
     pre_smd_col <- if (is_iptw) "Unadj. |SMD|" else "Pre |SMD|"
     out[[pre_smd_col]] <- ifelse(is.na(pre$smd), "", sprintf("%.3f", pre$smd))
 
-    # Post 컬럼 — Matching: N=, IPTW: ESS=
-    post_overall_col <- if (is_iptw)
-      paste0("Overall (Σw=", wsum_total, ")")
-    else
-      paste0("Overall (N=", n_post_total, ")")
-    out[[post_overall_col]] <- post$overall
+    # Post 컬럼 — Overall 제거, 그룹별 prefix로 컬럼명 충돌 방지
     for (gl in grp_levels) {
       post_grp_label <- if (is_iptw)
-        paste0(gl, " (Σw=", wsum_grp[[gl]], ")")
+        paste0("IPTW ", gl, " (Σw=", wsum_grp[[gl]], ")")
       else
-        paste0(gl, " (N=", n_post_grp[[gl]], ")")
+        paste0("Matched ", gl, " (N=", n_post_grp[[gl]], ")")
       out[[post_grp_label]] <- post[[paste0("grp_", gl)]]
     }
     post_smd_col <- if (is_iptw) "IPTW |SMD|" else "Post |SMD|"
