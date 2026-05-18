@@ -2,21 +2,21 @@
   "mode": "matching",
   "treat": "DCD",
   "estimand": "ATT",
-  "smd_cutoff": 0.15,
+  "smd_cutoff": 0.1,
   "best_config": {
-    "covariates": ["single_lung", "Male", "Height", "Diabetes", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_Male", "DON_Height", "DON_PFR", "DON_Distance", "Dx_OB", "DON_Race_White", "Race_White"],
-    "caliper": 0.2,
-    "ratio": 2,
+    "covariates": ["single_lung", "Age", "Male", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_Male", "DON_smoking20", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance", "Dx_OB", "INIT_single_lung", "Tx_interal", "DON_Race_White", "Race_White"],
+    "caliper": 0,
+    "ratio": 4,
     "method": "nearest",
-    "distance": "logit",
-    "reasoning": "Age has been persistently imbalanced (~0.20) across all configs despite tuning. Removing Age from the PS model since it appears the treated group has very different Age distribution. All other covariates have been well-balanced. With Age removed, caliper relaxed to 0.2 should yield strong balance and high N."
+    "distance": "probit",
+    "reasoning": "Probit is very close: only Creatinine at 0.1056. Try ratio 4 with probit — slightly larger ratio may average out Creatinine while keeping others well balanced."
   },
   "result_summary": {
     "balanced": true,
-    "matched_n": 62,
-    "effective_n": 62,
-    "matching_rate": 0.9254,
-    "max_smd": 0.1207,
-    "n_iterations": 13
+    "matched_n": 53,
+    "effective_n": 53,
+    "matching_rate": 0.791,
+    "max_smd": 0.0497,
+    "n_iterations": 25
   }
 }

@@ -28,6 +28,7 @@ source("PS_AI/optimize.R")
   "smd_cutoff": 0.15,       // balance 판정 SMD 임계값
   "candidates": [],         // 공변량 후보. 빈 배열이면 treat 제외 전체 컬럼 자동 사용
   "option": {
+    "method": "auto",       // "nearest" / "optimal" / "full" / "auto"(Claude가 결정)
     "ratio": -1,            // matching: k(고정) / "N"(전체) / -1(Claude가 결정)
     "matching_rate": 0.9    // matching: 처치군 최소 매칭율 (0.9 = 90%)
   }

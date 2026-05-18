@@ -74,12 +74,16 @@ if (length(candidates) == 0) candidates <- setdiff(names(df), treat)
 
 n_treat  <- sum(df[[treat]] == 1, na.rm = TRUE)
 n_ctrl   <- sum(df[[treat]] == 0, na.rm = TRUE)
-min_rate <- as.numeric(opt$matching_rate %||% 0.9)
+min_rate      <- as.numeric(opt$matching_rate %||% 0.9)
+fixed_method  <- { m <- opt$method %||% "auto"; if (m == "auto" || nchar(m) == 0) NULL else m }
 
 # NA 포함 변수 파악 (candidates 기준, 스크립트 시작 시 1회만)
 na_vars <- names(which(colSums(is.na(df[candidates])) > 0))
 
-cat(sprintf("모드: %s | 처치변수: %s | Estimand: %s\n", mode, treat, estimand))
+method_disp <- if (mode == "matching") {
+  sprintf(" (%s)", if (!is.null(fixed_method)) fixed_method else "auto")
+} else ""
+cat(sprintf("모드: %s%s | 처치변수: %s | Estimand: %s\n", mode, method_disp, treat, estimand))
 cat(sprintf("데이터: %d행 | 처치군: %d | 대조군: %d\n", nrow(df), n_treat, n_ctrl))
 cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f | 최소 매칭율: %.0f%%\n",
             length(candidates), smd_cutoff, min_rate * 100))
@@ -116,11 +120,17 @@ run_matching <- function(cfg) {
     if (is.na(cv) || cv <= 0) NULL else cv
   }
 
+  method_val <- fixed_method %||% cfg$method %||% "nearest"
+  dist_raw   <- cfg$distance %||% "logit"
+  glm_link   <- switch(dist_raw, "probit" = "probit", "linear.logit" = "linear.logit", NULL)
+  dist_val   <- if (!is.null(glm_link)) "glm" else dist_raw
+
   res <- tryCatch(
     MatchIt::matchit(f, data = df_cc,
-                     method   = cfg$method   %||% "nearest",
-                     distance = cfg$distance %||% "logit",
-                     ratio    = ratio_val,
+                     method   = method_val,
+                     distance = dist_val,
+                     link     = glm_link,
+                     ratio    = if (method_val == "full") NULL else ratio_val,
                      caliper  = caliper_val,
                      estimand = estimand),
     error = function(e) { cat("  [MatchIt 오류]", conditionMessage(e), "\n"); NULL }
@@ -146,7 +156,7 @@ run_iptw <- function(cfg) {
     WeightIt::weightit(f, data = df_cc,
                        method    = m,
                        estimand  = estimand,
-                       stabilize = isTRUE(cfg$stabilize)),
+                       stabilize = isTRUE(cfg$stabilize) && m == "ps"),
     error = function(e) { cat("  [WeightIt 오류]", conditionMessage(e), "\n"); NULL }
   )
   if (is.null(wt)) return(NULL)
@@ -163,8 +173,18 @@ compute_balance <- function(result, cfg) {
   if (is.null(result)) return(NULL)
 
   tryCatch({
-    bt     <- cobalt::bal.tab(result, stats = "mean.diffs",
-                              thresholds = c(m = smd_cutoff))
+    cols      <- c(treat, cfg$covariates)
+    df_cc     <- df[complete.cases(df[, cols, drop = FALSE]), ]
+    addl_covs <- setdiff(candidates, cfg$covariates)
+    addl_form <- if (length(addl_covs) > 0) reformulate(addl_covs) else NULL
+
+    bt     <- suppressWarnings(
+      cobalt::bal.tab(result,
+                      addl = addl_form,
+                      data = df_cc,
+                      stats = "mean.diffs",
+                      thresholds = c(m = smd_cutoff))
+    )
     bal_df <- bt$Balance
 
     if (!("Diff.Adj" %in% names(bal_df))) {
@@ -200,7 +220,7 @@ compute_balance <- function(result, cfg) {
       ess_treat     = if (exists("ess_t")) round(ess_t) else NA,
       ess_ctrl      = if (exists("ess_c")) round(ess_c) else NA,
       matching_rate = rate,
-      balanced      = all(smd_vec < smd_cutoff) && rate >= min_rate
+      balanced      = all(smd_vec < smd_cutoff)
     )
   }, error = function(e) {
     cat("  [Balance 오류]", conditionMessage(e), "\n"); NULL
@@ -291,7 +311,10 @@ if (mode == "matching") {
     floor(n_ctrl / n_treat)
   )
   rules_extra <- paste0(
-    "- method options: nearest, optimal, full\n",
+    if (!is.null(fixed_method))
+      sprintf("- method is FIXED to \"%s\" — do not change it\n", fixed_method)
+    else
+      "- method options: nearest, optimal, full\n",
     "- distance options: logit, probit, linear.logit\n",
     "- caliper 0 means no caliper\n",
     "- ratio -1 means use floor(n_ctrl/n_treat) automatically\n",
@@ -379,10 +402,12 @@ for (i in seq_len(max_iter)) {
   # 결과 출력
   if (!is.null(bal)) {
     eff_n <- if (mode == "matching") bal$matched_n else bal$effective_n
-    cat(sprintf("N=%d, rate=%.0f%%, bal=%s, maxSMD=%.3f\n",
-                eff_n, bal$matching_rate * 100,
-                if (bal$balanced) "YES" else "NO",
-                max(bal$smd, na.rm = TRUE)))
+    rate_warn <- if (mode == "matching" && bal$matching_rate < min_rate)
+      sprintf(" [<%.0f%%!]", min_rate * 100) else ""
+    cat(sprintf("N=%d, rate=%.0f%%%s, maxSMD=%.3f, bal=%s\n",
+                eff_n, bal$matching_rate * 100, rate_warn,
+                max(bal$smd, na.rm = TRUE),
+                if (bal$balanced) "YES" else "NO"))
 
     if (bal$balanced) {
       if (eff_n > best_bal_n) {
@@ -430,17 +455,23 @@ if (length(balanced) > 0) {
   best_item <- all_results[[which.min(max_smds)]]
   best_smd  <- round(max(best_item$bal$smd, na.rm = TRUE), 4)
 
+  cutoff_tip <- if (best_smd > smd_cutoff) {
+    sprintf("  1. smd_cutoff 완화: settings.json → %.2f 이상으로 수정\n",
+            round(best_smd + 0.02, 2))
+  } else {
+    "  1. 공변량 조합 변경: 결측 없는 변수 위주로 candidates 직접 지정\n"
+  }
   cat(sprintf(paste0(
     "\n══════════════════════════════════\n",
     "balanced 설정을 찾지 못했습니다.\n",
     "최선 결과 (반복 %d): max |SMD| = %.4f (임계값 %.2f)\n",
     "══════════════════════════════════\n",
     "대처 방법:\n",
-    "  1. smd_cutoff 완화: settings.json → %.2f 이상으로 수정\n",
+    "%s",
     "  2. IPTW 시도: settings.json → mode: \"iptw\"\n",
     "  3. 공변량 직접 지정: settings.json → candidates에 변수 목록 입력\n",
     "참고용으로 최선 결과를 저장합니다.\n"
-  ), best_item$iter, best_smd, smd_cutoff, best_smd))
+  ), best_item$iter, best_smd, smd_cutoff, cutoff_tip))
 }
 
 # ── 9. best_result.json 저장 ──────────────────────────────────────────

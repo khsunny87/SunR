@@ -38,6 +38,12 @@ smd_cut   <- d$smd_cutoff
 min_rate  <- d$min_rate
 bal       <- best$bal
 cfg       <- best$cfg
+
+all_candidates <- if (length(settings$candidates) == 0) setdiff(names(df), treat) else settings$candidates
+cols_cc        <- c(treat, cfg$covariates)
+df_cc          <- df[complete.cases(df[, cols_cc, drop = FALSE]), ]
+addl_covs      <- setdiff(all_candidates, cfg$covariates)
+addl_form      <- if (length(addl_covs) > 0) reformulate(addl_covs) else NULL
 ```
 
 ## 요약
@@ -61,8 +67,8 @@ ess_ctrl  <- if (!is.null(bal)) bal$ess_ctrl  %||% NA else NA
 if (mode == "matching") {
   extra_items <- c("매칭 후 처치군 N", "매칭 후 대조군 N")
   extra_vals  <- c(
-    if (!is.na(n_treat_matched)) n_treat_matched else "N/A",
-    if (!is.na(n_ctrl_matched))  n_ctrl_matched  else "N/A"
+    if (!is.na(n_treat_matched)) sprintf("%d (%.0f%%)", n_treat_matched, n_treat_matched / n_treat * 100) else "N/A",
+    if (!is.na(n_ctrl_matched))  sprintf("%d (%.0f%%)", n_ctrl_matched,  n_ctrl_matched  / n_ctrl  * 100) else "N/A"
   )
 } else {
   extra_items <- c("ESS (처치군)", "ESS (대조군)")
@@ -144,6 +150,8 @@ if (!is.null(bal)) {
 ```{r love_plot, fig.height=6, error=TRUE}
 if (!is.null(best$result)) {
   print(cobalt::love.plot(best$result,
+                          addl = addl_form,
+                          data = df_cc,
                           thresholds = c(m = smd_cut),
                           abs = TRUE, stars = "raw",
                           title = "Love Plot (Best Config)"))
