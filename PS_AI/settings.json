@@ -1,0 +1,11 @@
+{
+  "mode": "matching",
+  "treat": "DCD",
+  "estimand": "ATT",
+  "smd_cutoff": 0.15,
+  "candidates": [],
+  "option": {
+    "ratio": -1,
+    "matching_rate": 0.9
+  }
+}
