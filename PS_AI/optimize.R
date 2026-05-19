@@ -9,6 +9,8 @@ suppressPackageStartupMessages({
   library(MatchIt)
   library(WeightIt)
   library(cobalt)
+  library(survey)
+  library(smd)
   library(dplyr)
   library(ggplot2)
   library(readr)
@@ -27,6 +29,31 @@ if (nchar(api_key) == 0)
 apply_trim <- function(w, do_trim, pct = 0.99) {
   if (!isTRUE(do_trim)) return(w)
   pmin(w, quantile(w, pct, na.rm = TRUE))
+}
+
+# PS_Explorer compute_balance_stats와 동일한 SMD 계산 (matching/IPTW 공통)
+calc_survey_smd <- function(df_data, grp_var, cov_names, weights) {
+  t_vals <- df_data[[grp_var]]
+  vapply(cov_names, function(v) {
+    x        <- df_data[[v]]
+    complete <- !is.na(x) & !is.na(t_vals)
+    xc <- x[complete]; gc <- t_vals[complete]; wc <- weights[complete]
+    if (length(unique(gc)) < 2) return(NA_real_)
+    tryCatch({
+      if (is.numeric(xc)) {
+        calc_grp <- function(vals, ws) {
+          d <- survey::svydesign(ids = ~1, data = data.frame(x = vals), weights = ~ws)
+          list(m = as.numeric(survey::svymean(~x, d)),
+               v = as.numeric(survey::svyvar(~x, d)))
+        }
+        s1 <- calc_grp(xc[gc == 1], wc[gc == 1])
+        s2 <- calc_grp(xc[gc == 0], wc[gc == 0])
+        abs(s1$m - s2$m) / sqrt((s1$v + s2$v) / 2)
+      } else {
+        abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = FALSE)$estimate)
+      }
+    }, error = function(e) NA_real_)
+  }, FUN.VALUE = numeric(1))
 }
 
 parse_cfg_json <- function(text) {
@@ -58,9 +85,9 @@ parse_cfg_json <- function(text) {
 # ── 1. 설정 로드 ───────────────────────────────────────────────────────
 cat("=== PS_AI 최적화 시작 ===\n\n")
 settings   <- fromJSON("PS_AI/settings.json", simplifyVector = TRUE)
-mode       <- settings$mode
+mode       <- tolower(settings$mode)
 treat      <- settings$treat
-estimand   <- settings$estimand
+estimand   <- toupper(settings$estimand)
 smd_cutoff <- settings$smd_cutoff
 opt        <- settings$option
 
@@ -74,8 +101,8 @@ if (length(candidates) == 0) candidates <- setdiff(names(df), treat)
 
 n_treat  <- sum(df[[treat]] == 1, na.rm = TRUE)
 n_ctrl   <- sum(df[[treat]] == 0, na.rm = TRUE)
-min_rate      <- as.numeric(opt$matching_rate %||% 0.9)
-fixed_method  <- { m <- opt$method %||% "auto"; if (m == "auto" || nchar(m) == 0) NULL else m }
+min_rate      <- if (mode == "matching") as.numeric(opt$matching_rate %||% 0.9) else 0
+fixed_method  <- { m <- tolower(opt$method %||% "auto"); if (m == "auto" || nchar(m) == 0) NULL else m }
 
 # NA 포함 변수 파악 (candidates 기준, 스크립트 시작 시 1회만)
 na_vars <- names(which(colSums(is.na(df[candidates])) > 0))
@@ -85,8 +112,13 @@ method_disp <- if (mode == "matching") {
 } else ""
 cat(sprintf("모드: %s%s | 처치변수: %s | Estimand: %s\n", mode, method_disp, treat, estimand))
 cat(sprintf("데이터: %d행 | 처치군: %d | 대조군: %d\n", nrow(df), n_treat, n_ctrl))
-cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f | 최소 매칭율: %.0f%%\n",
-            length(candidates), smd_cutoff, min_rate * 100))
+if (mode == "matching") {
+  cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f | 최소 매칭율: %.0f%%\n",
+              length(candidates), smd_cutoff, min_rate * 100))
+} else {
+  cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f\n",
+              length(candidates), smd_cutoff))
+}
 if (length(na_vars) > 0)
   cat(sprintf("결측치 포함 변수 (%d개, 선택 시 해당 환자 제외됨): %s\n",
               length(na_vars), paste(na_vars, collapse = ", ")))
@@ -109,7 +141,7 @@ run_matching <- function(cfg) {
   f <- as.formula(paste(treat, "~", paste(covs, collapse = " + ")))
 
   ratio_raw <- cfg$ratio %||% 1
-  ratio_val <- if (identical(ratio_raw, -1) || identical(ratio_raw, "N")) {
+  ratio_val <- if (identical(ratio_raw, -1) || toupper(as.character(ratio_raw)) == "N") {
     floor(n_ctrl_cc / n_treat)   # ratio는 cc 기준 대조군 / 전체 처치군
   } else {
     max(1L, as.integer(ratio_raw))
@@ -120,8 +152,8 @@ run_matching <- function(cfg) {
     if (is.na(cv) || cv <= 0) NULL else cv
   }
 
-  method_val <- fixed_method %||% cfg$method %||% "nearest"
-  dist_raw   <- cfg$distance %||% "logit"
+  method_val <- fixed_method %||% tolower(cfg$method %||% "nearest")
+  dist_raw   <- tolower(cfg$distance %||% "logit")
   glm_link   <- switch(dist_raw, "probit" = "probit", "linear.logit" = "linear.logit", NULL)
   dist_val   <- if (!is.null(glm_link)) "glm" else dist_raw
 
@@ -138,6 +170,8 @@ run_matching <- function(cfg) {
   res
 }
 
+last_iptw_fail <- ""
+
 run_iptw <- function(cfg) {
   covs <- cfg$covariates
   if (length(covs) == 0) return(NULL)
@@ -149,19 +183,45 @@ run_iptw <- function(cfg) {
   if (n_drop > 0) cat(sprintf("  (결측 %d행 제거 → %d행)\n", n_drop, nrow(df_cc)))
 
   f <- as.formula(paste(treat, "~", paste(covs, collapse = " + ")))
-  m <- cfg$method %||% "ps"
+  m <- tolower(cfg$method %||% "ps")
   if (m == "auto") m <- "ps"
 
-  wt <- tryCatch(
-    WeightIt::weightit(f, data = df_cc,
-                       method    = m,
-                       estimand  = estimand,
-                       stabilize = isTRUE(cfg$stabilize) && m == "ps"),
-    error = function(e) { cat("  [WeightIt 오류]", conditionMessage(e), "\n"); NULL }
-  )
-  if (is.null(wt)) return(NULL)
+  fail_msgs <- character(0)
 
-  if (isTRUE(cfg$trim)) {
+  wt <- withCallingHandlers(
+    tryCatch(
+      WeightIt::weightit(f, data = df_cc,
+                         method    = m,
+                         estimand  = estimand,
+                         stabilize = isTRUE(cfg$stabilize) && m == "ps"),
+      error = function(e) {
+        cat("  [WeightIt 오류]", conditionMessage(e), "\n")
+        fail_msgs <<- c(fail_msgs, conditionMessage(e))
+        NULL
+      }
+    ),
+    warning = function(w) {
+      msg <- conditionMessage(w)
+      if (grepl("degenerate|All weights are NA|converge|maxit", msg, ignore.case = TRUE)) {
+        cat("  [WeightIt 경고]", msg, "\n")
+        fail_msgs <<- c(fail_msgs, msg)
+      }
+      invokeRestart("muffleWarning")
+    }
+  )
+
+  # 퇴화 솔루션 명시적 감지
+  if (!is.null(wt)) {
+    t_idx <- df_cc[[treat]] == 1
+    if (all(wt$weights[t_idx] == 0 | is.na(wt$weights[t_idx]))) {
+      fail_msgs <<- c(fail_msgs, "All weights are zero/NA in treatment group (degenerate solution)")
+      wt <- NULL
+    }
+  }
+
+  last_iptw_fail <<- paste(fail_msgs, collapse = "; ")
+
+  if (!is.null(wt) && isTRUE(cfg$trim)) {
     wt$weights <- apply_trim(wt$weights, TRUE)
   }
   wt
@@ -173,54 +233,52 @@ compute_balance <- function(result, cfg) {
   if (is.null(result)) return(NULL)
 
   tryCatch({
-    cols      <- c(treat, cfg$covariates)
-    df_cc     <- df[complete.cases(df[, cols, drop = FALSE]), ]
-    addl_covs <- setdiff(candidates, cfg$covariates)
-    addl_form <- if (length(addl_covs) > 0) reformulate(addl_covs) else NULL
-
-    bt     <- suppressWarnings(
-      cobalt::bal.tab(result,
-                      addl = addl_form,
-                      data = df_cc,
-                      stats = "mean.diffs",
-                      thresholds = c(m = smd_cutoff))
-    )
-    bal_df <- bt$Balance
-
-    if (!("Diff.Adj" %in% names(bal_df))) {
-      cat("  [경고] Diff.Adj 컬럼 없음\n"); return(NULL)
-    }
-
-    smd_vec <- abs(bal_df[["Diff.Adj"]])
-    names(smd_vec) <- rownames(bal_df)
-    # distance / prop.score 행 제거
-    smd_vec <- smd_vec[!names(smd_vec) %in% c("distance", "prop.score")]
-    smd_vec <- smd_vec[!is.na(smd_vec)]
+    cols  <- c(treat, cfg$covariates)
+    df_cc <- df[complete.cases(df[, cols, drop = FALSE]), ]
 
     if (inherits(result, "matchit")) {
-      md          <- MatchIt::match.data(result)
-      matched_n   <- sum(md[[treat]] == 1, na.rm = TRUE)
-      rate        <- matched_n / n_treat
-      effective_n <- matched_n
+      # ── Matching: survey SMD on matched data (PS_Explorer Balance Table과 동일)
+      md       <- MatchIt::match.data(result)
+      all_covs <- c(cfg$covariates, setdiff(candidates, cfg$covariates))
+      smd_vec  <- calc_survey_smd(md, treat, all_covs, md$weights)
+      smd_vec  <- smd_vec[!is.na(smd_vec)]
+
+      matched_n      <- sum(md[[treat]] == 1, na.rm = TRUE)
+      matched_n_ctrl <- sum(md[[treat]] == 0, na.rm = TRUE)
+      rate           <- matched_n / n_treat
+      effective_n    <- matched_n
+      ess_t          <- NA_real_; ess_c <- NA_real_
+      wsum_treat     <- NA_real_; wsum_ctrl <- NA_real_
     } else {
+      # ── IPTW: survey 기반 SMD (PS_Explorer Balance Table과 동일)
+      all_covs <- c(cfg$covariates, setdiff(candidates, cfg$covariates))
       w <- result$weights
-      t <- df[[treat]]
-      ess_t <- sum(w[t == 1])^2 / sum(w[t == 1]^2)
-      ess_c <- sum(w[t == 0])^2 / sum(w[t == 0]^2)
-      effective_n <- round(min(ess_t, ess_c))
-      matched_n   <- nrow(df)
-      rate        <- 1.0
-      min_rate    <<- 0.0
+      t <- df_cc[[treat]]
+      smd_vec <- calc_survey_smd(df_cc, treat, all_covs, w)
+      smd_vec <- smd_vec[!is.na(smd_vec)]
+
+      ess_t      <- sum(w[t == 1])^2 / sum(w[t == 1]^2)
+      ess_c      <- sum(w[t == 0])^2 / sum(w[t == 0]^2)
+      wsum_treat <- round(sum(w[t == 1]))
+      wsum_ctrl  <- round(sum(w[t == 0]))
+      effective_n    <- round(min(ess_t, ess_c))
+      matched_n      <- nrow(df)
+      matched_n_ctrl <- NA_integer_
+      rate           <- 1.0
+      min_rate       <<- 0.0
     }
 
     list(
-      smd           = smd_vec,
-      matched_n     = matched_n,
-      effective_n   = effective_n,
-      ess_treat     = if (exists("ess_t")) round(ess_t) else NA,
-      ess_ctrl      = if (exists("ess_c")) round(ess_c) else NA,
-      matching_rate = rate,
-      balanced      = all(smd_vec < smd_cutoff)
+      smd            = smd_vec,
+      matched_n      = matched_n,
+      matched_n_ctrl = matched_n_ctrl,
+      effective_n    = effective_n,
+      ess_treat      = round(ess_t),
+      ess_ctrl       = round(ess_c),
+      wsum_treat     = if (inherits(result, "matchit")) NA_real_ else wsum_treat,
+      wsum_ctrl      = if (inherits(result, "matchit")) NA_real_ else wsum_ctrl,
+      matching_rate  = rate,
+      balanced       = all(smd_vec < smd_cutoff)
     )
   }, error = function(e) {
     cat("  [Balance 오류]", conditionMessage(e), "\n"); NULL
@@ -233,9 +291,13 @@ format_result_msg <- function(iter, cfg, bal) {
   cfg_str <- toJSON(cfg, auto_unbox = TRUE)
 
   if (is.null(bal)) {
+    fail_hint  <- if (nchar(last_iptw_fail) > 0)
+      sprintf("Failure reason: %s\n", last_iptw_fail) else ""
+    ebal_hint  <- if (grepl("degenerate|zero|converge", last_iptw_fail, ignore.case = TRUE))
+      "ebal failed — immediately switch to method 'ps' or 'cbps', or reduce covariates.\n" else ""
     return(sprintf(
-      "Iteration %d: FAILED (config could not run).\nConfig: %s\n\nPlease try a different configuration.",
-      iter, cfg_str
+      "Iteration %d: FAILED.\n%s%sConfig: %s\n\nPlease try a different configuration.",
+      iter, fail_hint, ebal_hint, cfg_str
     ))
   }
 
@@ -243,7 +305,8 @@ format_result_msg <- function(iter, cfg, bal) {
     sprintf("Matched N (treated): %d / %d | Rate: %.1f%%",
             bal$matched_n, n_treat, bal$matching_rate * 100)
   } else {
-    sprintf("ESS: %d (all %d obs used)", bal$effective_n, bal$matched_n)
+    sprintf("Σw treat: %d, Σw ctrl: %d (all %d obs used, ESS: %d)",
+            bal$wsum_treat, bal$wsum_ctrl, bal$matched_n, bal$effective_n)
   }
 
   smd_lines <- paste(
@@ -322,7 +385,11 @@ if (mode == "matching") {
   )
 } else {
   fmt_ex <- '{"covariates":[...],"method":"ps","stabilize":false,"trim":false,"reasoning":"..."}'
-  rules_extra <- "- method options: ps, cbps, ebal\n"
+  rules_extra <- paste0(
+    "- method options: ps, cbps, ebal\n",
+    "- ps is the most robust; start with ps, try ebal/cbps only when ps is balanced but ESS is low\n",
+    "- ebal is sensitive to large covariate sets (>15 vars) and can produce degenerate solutions (all weights=0); if ebal fails, immediately switch to ps or cbps\n"
+  )
 }
 
 na_note <- if (length(na_vars) > 0) {
@@ -395,20 +462,36 @@ for (i in seq_len(max_iter)) {
     next
   }
 
+  # IPTW: stabilize/trim은 settings.json 고정값으로 덮어씀 (Claude 임의변경 방지)
+  if (mode == "iptw") {
+    cfg$stabilize <- isTRUE(opt$stabilize)
+    cfg$trim      <- isTRUE(opt$trim)
+  }
+
   # 분석 실행
   result <- if (mode == "matching") run_matching(cfg) else run_iptw(cfg)
   bal    <- compute_balance(result, cfg)
 
   # 결과 출력
   if (!is.null(bal)) {
-    eff_n <- if (mode == "matching") bal$matched_n else bal$effective_n
-    rate_warn <- if (mode == "matching" && bal$matching_rate < min_rate)
-      sprintf(" [<%.0f%%!]", min_rate * 100) else ""
-    cat(sprintf("N=%d, rate=%.0f%%%s, maxSMD=%.3f, bal=%s\n",
-                eff_n, bal$matching_rate * 100, rate_warn,
+    if (mode == "matching") {
+      rate_warn <- if (bal$matching_rate < min_rate)
+        sprintf(" [<%.0f%%!]", min_rate * 100) else ""
+      n_str <- sprintf("%d (%.0f%%) vs. %d (%.0f%%)%s",
+                       bal$matched_n_ctrl, bal$matched_n_ctrl / n_ctrl * 100,
+                       bal$matched_n,      bal$matching_rate  * 100,
+                       rate_warn)
+    } else {
+      n_str <- sprintf("Σw %d (ESS %d) vs. Σw %d (ESS %d)",
+                       bal$wsum_ctrl, bal$ess_ctrl,
+                       bal$wsum_treat, bal$ess_treat)
+    }
+    cat(sprintf("%s, maxSMD=%.3f, bal=%s\n",
+                n_str,
                 max(bal$smd, na.rm = TRUE),
                 if (bal$balanced) "YES" else "NO"))
 
+    eff_n <- if (mode == "matching") bal$matched_n else bal$effective_n
     if (bal$balanced) {
       if (eff_n > best_bal_n) {
         best_bal_n <- eff_n
@@ -504,7 +587,16 @@ report_data <- list(
   mode        = mode,
   treat       = treat,
   smd_cutoff  = smd_cutoff,
-  min_rate    = min_rate
+  min_rate    = min_rate,
+  pre_smd     = vapply(candidates, function(v) {
+    x <- df[[v]]; g <- df[[treat]]
+    complete <- !is.na(x) & !is.na(g)
+    if (sum(complete) == 0 || length(unique(g[complete])) < 2) return(NA_real_)
+    tryCatch(
+      abs(smd::smd(x = x[complete], g = factor(g[complete]), na.rm = FALSE)$estimate),
+      error = function(e) NA_real_
+    )
+  }, FUN.VALUE = numeric(1))
 )
 saveRDS(report_data, "PS_AI/.report_data.rds")
 

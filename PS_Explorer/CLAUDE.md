@@ -52,7 +52,18 @@ MatchIt::matchit(formula, data, method, distance, ratio, caliper, estimand = inp
 - UI 순서: Estimand → Method → Ratio → 1:N스위치 → Caliper → Distance (IPTW와 동일하게 Estimand 최상단)
 - 1:N 매칭 스위치 ON 시 `ratio = floor(n_ctrl / n_trt)` 자동 계산
 - 스위치 UI: `uiOutput("ui_ratio")` + CSS `opacity:0.4; pointer-events:none` (shinyjs 미사용)
-- cobalt Love/Balance Plot PS 변수명: `"distance"`
+- cobalt Balance Plot PS 변수명: `"distance"` (Love Plot은 cobalt 미사용)
+
+---
+
+## Love Plot
+
+`compute_balance_stats()` + ggplot2로 구현 — Balance Table과 **동일한 survey SMD** 사용.
+
+- pre (Unadjusted): `compute_balance_stats(df, grp, all_covs, weights = NULL)` → `smd::smd()` 무가중
+- post (Adjusted): matching → `matched_df$weights`, IPTW → `apply_trim(res$weights, ...)`
+- Y축 순서: unadjusted SMD 오름차순 (낮은 값 하단, 높은 값 상단)
+- 임계선: 0.1 (실선), 0.2 (회색 점선)
 
 ---
 
@@ -67,7 +78,7 @@ WeightIt::weightit(formula, data, method, estimand, stabilize)
 - `stabilize`: `isTRUE(input$stabilize_weights)`
 - 트리밍: `apply_trim(res$weights, isTRUE(input$trim_weights))`
 
-### cobalt에 trimmed weights 전달
+### cobalt에 trimmed weights 전달 (bal.plot 전용)
 
 ```r
 res_show <- res

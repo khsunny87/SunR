@@ -39,14 +39,14 @@ IPTW option 파라미터:
 ```json
 "option": {
   "method": "auto",         // "ps" / "cbps" / "ebal" / "auto"(Claude가 결정)
-  "stabilize": false,
-  "trim": false
+  "stabilize": false,       // 고정값 — Claude가 변경 불가
+  "trim": false             // 고정값 — Claude가 변경 불가
 }
 ```
 
 ## 의존 패키지
 
-`httr2`, `jsonlite`, `MatchIt`, `WeightIt`, `cobalt`, `dplyr`, `ggplot2`, `readr`, `rmarkdown`
+`httr2`, `jsonlite`, `MatchIt`, `WeightIt`, `cobalt`, `survey`, `smd`, `dplyr`, `ggplot2`, `readr`, `rmarkdown`
 
 ---
 
@@ -54,10 +54,10 @@ IPTW option 파라미터:
 
 | 함수 | 역할 |
 |------|------|
+| `calc_survey_smd(df_data, grp_var, cov_names, weights)` | survey 기반 SMD (PS_Explorer Balance Table과 동일) |
 | `run_matching(cfg)` | cfg JSON으로 `MatchIt::matchit()` 실행, NULL 반환 시 오류 |
 | `run_iptw(cfg)` | cfg JSON으로 `WeightIt::weightit()` 실행, trim 적용 포함 |
-| `compute_balance(result, cfg)` | `cobalt::bal.tab()` → SMD 벡터 + matched_n + balanced 여부 |
-| `is_balanced(bal)` | 모든 SMD < smd_cutoff AND matching_rate ≥ min_rate |
+| `compute_balance(result, cfg)` | `calc_survey_smd()` → SMD 벡터 + matched_n + balanced 여부 |
 | `claude_suggest(messages, system_prompt)` | httr2로 Claude API 호출, 텍스트 반환 |
 | `parse_cfg_json(text)` | 마크다운 코드블록 제거 후 JSON 파싱 (중괄호 매칭 폴백 포함) |
 | `format_result_msg(iter, cfg, bal)` | Claude에게 보낼 iteration 결과 텍스트 생성 |
@@ -88,14 +88,17 @@ IPTW option 파라미터:
 
 ## compute_balance 주의사항
 
-### Diff.Adj 컬럼
+### calc_survey_smd — PS_Explorer와 동일 SMD 계산
 
-`cobalt::bal.tab()` 결과에서 SMD는 `"Diff.Adj"` 컬럼 사용. 컬럼 부재 시 NULL 반환.
+matching/IPTW 공통으로 사용. cobalt Diff.Adj 방식과 분모(분산 계산)가 다를 수 있음.
 
 ```r
-smd_vec <- abs(bal_df[["Diff.Adj"]])
-# distance / prop.score 행 제거 (PS 변수 자체 제외)
-smd_vec <- smd_vec[!names(smd_vec) %in% c("distance", "prop.score")]
+# 연속변수: survey weighted variance 기반 pooled SD
+s1 <- calc_grp(xc[gc==1], wc[gc==1])  # svymean/svyvar
+s2 <- calc_grp(xc[gc==0], wc[gc==0])
+abs(s1$m - s2$m) / sqrt((s1$v + s2$v) / 2)
+
+# 범주형: smd::smd(x, g, w=)
 ```
 
 ### IPTW ESS

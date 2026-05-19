@@ -628,23 +628,42 @@ server <- function(input, output, session) {
   output$love_plot <- renderPlot({
     res  <- ps_result(); req(res)
     df   <- df_for_display()
-    grp  <- input$grp_var; covs <- rv$sel
-    all_covs  <- setdiff(names(df), grp)
-    addl_vars <- setdiff(all_covs, covs)
-    addl_form <- if (length(addl_vars) > 0) reformulate(addl_vars) else NULL
+    grp  <- input$grp_var
+    all_covs <- setdiff(names(df), grp)
 
-    vline02 <- ggplot2::geom_vline(xintercept = 0.2, linetype = "dashed", color = "gray60")
+    pre <- compute_balance_stats(df, grp, all_covs, weights = NULL)
+
     if (input$ps_method == "matching") {
-      cobalt::love.plot(res, addl = addl_form, data = df,
-                        threshold = 0.1, abs = TRUE, var.order = "unadjusted",
-                        title = "Love Plot — Matching") + vline02
+      matched_df <- tryCatch(MatchIt::match.data(res), error = function(e) NULL)
+      req(!is.null(matched_df))
+      matched_df[[grp]] <- as.integer(as.factor(matched_df[[grp]])) - 1L
+      post  <- compute_balance_stats(matched_df, grp, all_covs, weights = matched_df$weights)
+      title <- "Love Plot — Matching"
     } else {
-      res_show <- res
-      res_show$weights <- apply_trim(res$weights, isTRUE(input$trim_weights))
-      cobalt::love.plot(res_show, addl = addl_form, data = df,
-                        threshold = 0.1, abs = TRUE, var.order = "unadjusted",
-                        title = paste0("Love Plot — IPTW (", input$estimand, ")")) + vline02
+      w     <- apply_trim(res$weights, isTRUE(input$trim_weights))
+      post  <- compute_balance_stats(df, grp, all_covs, weights = w)
+      title <- paste0("Love Plot — IPTW (", input$estimand, ")")
     }
+
+    var_order <- pre$var[order(pre$smd, na.last = FALSE)]
+    plot_df <- rbind(
+      data.frame(var = pre$var,  smd = pre$smd,  sample = "Unadjusted", stringsAsFactors = FALSE),
+      data.frame(var = post$var, smd = post$smd, sample = "Adjusted",   stringsAsFactors = FALSE)
+    )
+    plot_df$var <- factor(plot_df$var, levels = var_order)
+
+    ggplot2::ggplot(plot_df, ggplot2::aes(x = smd, y = var, color = sample)) +
+      ggplot2::geom_point(size = 2.5) +
+      ggplot2::geom_vline(xintercept = 0.1, linetype = "dashed") +
+      ggplot2::geom_vline(xintercept = 0.2, linetype = "dashed", color = "gray60") +
+      ggplot2::scale_color_manual(
+        values = c("Unadjusted" = "#F8766D", "Adjusted" = "#00BFC4"),
+        breaks = c("Unadjusted", "Adjusted")
+      ) +
+      ggplot2::labs(x = "Absolute Standardized Mean Differences", y = NULL,
+                    color = "Sample", title = title) +
+      ggplot2::theme_bw(base_size = 12) +
+      ggplot2::theme(legend.position = "bottom")
   })
 
   # ── Balance Plot ──────────────────────────────────────────────────────────────

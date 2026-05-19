@@ -61,8 +61,8 @@ if (mode == "matching" && !is.null(best$result) && inherits(best$result, "matchi
   n_ctrl_matched  <- sum(md[[treat]] == 0, na.rm = TRUE)
 }
 
-ess_treat <- if (!is.null(bal)) bal$ess_treat %||% NA else NA
-ess_ctrl  <- if (!is.null(bal)) bal$ess_ctrl  %||% NA else NA
+wsum_treat <- if (!is.null(bal)) bal$wsum_treat %||% NA else NA
+wsum_ctrl  <- if (!is.null(bal)) bal$wsum_ctrl  %||% NA else NA
 
 if (mode == "matching") {
   extra_items <- c("매칭 후 처치군 N", "매칭 후 대조군 N")
@@ -71,10 +71,12 @@ if (mode == "matching") {
     if (!is.na(n_ctrl_matched))  sprintf("%d (%.0f%%)", n_ctrl_matched,  n_ctrl_matched  / n_ctrl  * 100) else "N/A"
   )
 } else {
-  extra_items <- c("ESS (처치군)", "ESS (대조군)")
+  ess_treat <- if (!is.null(bal)) bal$ess_treat %||% NA else NA
+  ess_ctrl  <- if (!is.null(bal)) bal$ess_ctrl  %||% NA else NA
+  extra_items <- c("Σw (처치군)", "Σw (대조군)")
   extra_vals  <- c(
-    if (!is.na(ess_treat)) ess_treat else "N/A",
-    if (!is.na(ess_ctrl))  ess_ctrl  else "N/A"
+    if (!is.na(wsum_treat)) sprintf("%d (ESS %d)", wsum_treat, ess_treat %||% NA) else "N/A",
+    if (!is.na(wsum_ctrl))  sprintf("%d (ESS %d)", wsum_ctrl,  ess_ctrl  %||% NA) else "N/A"
   )
 }
 
@@ -147,17 +149,31 @@ if (!is.null(bal)) {
 
 ## Love Plot
 
-```{r love_plot, fig.height=6, error=TRUE}
-if (!is.null(best$result)) {
-  print(cobalt::love.plot(best$result,
-                          addl = addl_form,
-                          data = df_cc,
-                          thresholds = c(m = smd_cut),
-                          abs = TRUE, stars = "raw",
-                          title = "Love Plot (Best Config)"))
-} else {
-  cat("분석 결과 없음\n")
-}
+```{r love_plot, fig.height=7, error=TRUE}
+pre_smd  <- d$pre_smd %||% setNames(rep(NA_real_, length(all_candidates)), all_candidates)
+post_smd <- if (!is.null(bal)) bal$smd else setNames(rep(NA_real_, length(all_candidates)), all_candidates)
+
+var_order <- names(pre_smd)[order(pre_smd, na.last = FALSE)]
+plot_df <- rbind(
+  data.frame(var = names(pre_smd),  smd = pre_smd,  sample = "Unadjusted",
+             stringsAsFactors = FALSE, row.names = NULL),
+  data.frame(var = names(post_smd), smd = post_smd, sample = "Adjusted",
+             stringsAsFactors = FALSE, row.names = NULL)
+)
+plot_df$var <- factor(plot_df$var, levels = var_order)
+
+ggplot(plot_df, aes(x = smd, y = var, color = sample)) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = smd_cut, linetype = "dashed") +
+  scale_color_manual(
+    values = c("Unadjusted" = "#F8766D", "Adjusted" = "#00BFC4"),
+    breaks = c("Unadjusted", "Adjusted")
+  ) +
+  labs(x = "Absolute Standardized Mean Differences", y = NULL,
+       color = "Sample",
+       title = paste0("Love Plot (Best Config) — ", mode)) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom")
 ```
 
 ---

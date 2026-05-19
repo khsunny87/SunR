@@ -47,6 +47,13 @@
 - **원인**: `compute_balance_stats`가 grp_var를 logical로 받으면 `grp_FALSE`/`grp_TRUE` 컬럼 생성, 외부 조립 코드는 `grp_0`/`grp_1` 접근 → NULL → DT 에러
 - **해결**: `output$bal_tbl` 진입 시 `if (is.logical(df[[grp]])) df[[grp]] <- as.integer(df[[grp]])` 로 0/1 정규화
 
+### Love Plot — cobalt → survey SMD ggplot2 교체 (2026-05-19)
+- **문제**: cobalt `love.plot()` SMD(Diff.Adj)와 Balance Table SMD(survey) 값이 달라 같은 결과에서 판정이 엇갈림
+- **해결**: `compute_balance_stats()` + ggplot2 커스텀 플롯으로 교체 → Balance Table과 동일한 SMD
+  - pre (Unadjusted): `weights=NULL` → `smd::smd()` 무가중
+  - post (Adjusted): `weights = matched_df$weights` 또는 `apply_trim(res$weights, ...)`
+  - Y축 순서: unadjusted SMD 오름차순 (낮은 값 하단)
+
 ### fmt_stat_w 단일 레벨 factor 에러 수정
 - **문제**: 매칭 후 한 그룹에 범주형 변수 값이 하나만 남으면 `survey::svymean` → "contrasts can be applied only to factors with 2 or more levels" 에러
 - **원인**: 1레벨 factor를 `survey::svymean(~xf, d)` 에 전달 시 `model.matrix` 에서 에러
@@ -65,8 +72,8 @@ data_raw() → data_clean() → ps_result()
 ```
 
 **분석 방법 2가지:**
-- **Matching**: MatchIt + cobalt (Love Plot, Balance Plot, PS Distribution `"distance"`)
-- **IPTW**: WeightIt + cobalt + survey (Balance Table N=Σw, SMD survey::svyvar 방식)
+- **Matching**: MatchIt + ggplot2 Love Plot + cobalt Balance Plot (`"distance"`)
+- **IPTW**: WeightIt + ggplot2 Love Plot + cobalt Balance Plot (`"prop.score"`) + survey (Balance Table N=Σw, SMD)
 
 ---
 

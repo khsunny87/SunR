@@ -1,22 +1,21 @@
 {
-  "mode": "matching",
+  "mode": "iptw",
   "treat": "DCD",
-  "estimand": "ATT",
-  "smd_cutoff": 0.15,
+  "estimand": "ATE",
+  "smd_cutoff": 0.1,
   "best_config": {
-    "covariates": ["single_lung", "Age", "Male", "Height", "Weight", "BMI", "Diabetes", "Smoking", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_Male", "DON_HTN", "DON_Height", "DON_PFR", "DON_Distance", "Dx_OB", "Tx_interal", "DON_Race_White", "Race_White"],
-    "caliper": 0,
-    "ratio": 2,
-    "method": "nearest",
-    "distance": "logit",
-    "reasoning": "Caliper isn't the binding constraint — the 13 unmatched treated likely lack any control matches due to missingness in complete-case analysis. Try no caliper (0) to see if more treated can be matched."
+    "covariates": ["single_lung", "Age", "Male", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance", "Dx_OB", "INIT_single_lung", "Tx_interal", "Race_White", "DON_Race_White", "DON_Diabetes"],
+    "method": "cbps",
+    "stabilize": false,
+    "trim": false,
+    "reasoning": "ebal struggles beyond ~21 covariates. Best result so far was CBPS iteration 3 (ESS=25, balanced). Returning to CBPS with comprehensive covariate list including all previously imbalanced variables (Smoking, MV, DON_Diabetes, Tx_interal added). CBPS handles large covariate sets well."
   },
   "result_summary": {
     "balanced": true,
-    "matched_n": 55,
-    "effective_n": 55,
-    "matching_rate": 0.8209,
-    "max_smd": 0.1342,
-    "n_iterations": 10
+    "matched_n": 1083,
+    "effective_n": 26,
+    "matching_rate": 1,
+    "max_smd": 0.0721,
+    "n_iterations": 18
   }
 }
