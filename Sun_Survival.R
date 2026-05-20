@@ -143,12 +143,17 @@ MV_Cox<-function(data,TS_name,trace=T,rename=F,Labels=NULL,keep_variable='1',plo
 
 
 
-Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,palette=c(muted("blue"), muted("red")),type='survival',y_title='Survival',y_lim=c(0,1),P_x=0,P_y=Inf,main_title="",P_v="",print_p=T){
-  
+Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20,unit='Year',conf.int=T,palette=c(muted("blue"), muted("red")),type='survival',y_title='Survival',y_lim=c(0,1),P_x=0,P_y=Inf,main_title="",P_v="",print_p=T,weights=""){
+  if (weights==""){
+        s_w=NULL
+    }else{
+      s_w=data[[weights]]
+    }
   
   if(Group_name==""){
+
     res<-data_frame(TS=data[[TS_name]])%>%
-      survfit2(TS ~ 1, data = .)
+      survfit2(TS ~ 1, data = .,weights=s_w)
     print_p=F    
     P_v=""  
     km_fig<-res%>%
@@ -170,7 +175,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
     }
     
     res<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
-      survfit2(TS ~ group, data = .)
+      survfit2(TS ~ group, data = .,weights=s_w)
     if(P_v=="" & print_p){
     log_rank<-data_frame(TS=data[[TS_name]],group=data[[Group_name]])%>%
       survdiff(TS ~group,data=.)
@@ -195,7 +200,7 @@ Get_KM2<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   }
   
   km_fig<-km_fig+
-    add_censor_mark(size = 2)+
+    { if(weights=="") add_censor_mark(size=2) else NULL } +
     labs(x = unit,y=y_title) + 
     {if(print_p) annotate("text", x=P_x, y=P_y, label=P_v, size=7,hjust=0,vjust=2) else NULL}+
     scale_x_continuous(labels=function(x)x,breaks = seq(0, xmax, by = break.by))+
