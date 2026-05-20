@@ -60,15 +60,15 @@ fmt_stat_w <- function(x, w = NULL, is_cont) {
     wsd <- sqrt(as.numeric(survey::svyvar(~x, d)))
     sprintf("%.1f ± %.1f", wm, wsd)
   } else {
-    xf <- as.factor(x)
-    ux <- levels(xf)
-    tab_n <- table(x)
+    xf   <- as.factor(x)
+    ux   <- levels(xf)
+    wsum <- tapply(w, xf, sum)
     if (length(ux) < 2) {
-      paste0(ux, ": ", tab_n[ux], " (100%)")
+      paste0(ux, ": ", round(wsum[ux], 1), " (100%)")
     } else {
       d     <- survey::svydesign(ids = ~1, data = data.frame(x = xf), weights = ~w)
       props <- as.numeric(survey::svymean(~xf, d)) * 100
-      paste(paste0(ux, ": ", tab_n[ux], " (", round(props, 1), "%)"), collapse = "; ")
+      paste(paste0(ux, ": ", round(wsum[ux], 1), " (", round(props, 1), "%)"), collapse = "; ")
     }
   }
 }
