@@ -36,3 +36,18 @@ mat_design%>%
   add_p()%>%
   add_stat(fns=everything() ~ my_smd2)
 
+
+
+
+IPTW_cohort<-function(surv_data,IPTW_cov){
+  prematch<-surv_data%>%
+    mutate(DON_Race_White=DON_Race == "White",Race_White=Race == "White")%>%
+    drop_na(any_of(IPTW_cov))
+  IPTW_res<-prematch%>%
+  weightit(as.formula(paste0('DCD~',paste0(IPTW_cov,collapse='+'))),data = ., method = "cbps",estimand = "ATE")
+
+prematch$weights <-IPTW_res$weights
+  return(prematch)
+
+
+}
