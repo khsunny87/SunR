@@ -4,18 +4,18 @@
   "estimand": "ATE",
   "smd_cutoff": 0.1,
   "best_config": {
-    "covariates": ["single_lung", "Age", "Male", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance", "Dx_OB", "INIT_single_lung", "Tx_interal", "Race_White", "DON_Race_White", "DON_Diabetes"],
+    "covariates": ["single_lung", "Age", "Male", "Height", "BMI", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "DON_Age", "DON_Male", "DON_smoking20", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_PFR", "DON_Distance", "Dx_OB", "Tx_interal", "DON_Race_White", "Race_White"],
     "method": "cbps",
     "stabilize": false,
     "trim": false,
-    "reasoning": "ebal struggles beyond ~21 covariates. Best result so far was CBPS iteration 3 (ESS=25, balanced). Returning to CBPS with comprehensive covariate list including all previously imbalanced variables (Smoking, MV, DON_Diabetes, Tx_interal added). CBPS handles large covariate sets well."
+    "reasoning": "PS logistic gave many imbalanced covariates with very low ESS (18). Try CBPS which directly optimizes for covariate balance, should improve SMDs substantially while keeping all covariates."
   },
   "result_summary": {
     "balanced": true,
     "matched_n": 1083,
-    "effective_n": 26,
+    "effective_n": 25,
     "matching_rate": 1,
-    "max_smd": 0.0721,
-    "n_iterations": 18
+    "max_smd": 0.0871,
+    "n_iterations": 10
   }
 }
