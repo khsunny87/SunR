@@ -49,16 +49,23 @@ fmt_stat <- function(x, is_normal = NULL) {
 }
 
 # Balance Table용: survey 패키지 기반 가중 mean±SD 또는 n(%)
-fmt_stat_w <- function(x, w = NULL, is_cont) {
+fmt_stat_w <- function(x, w = NULL, is_cont, is_normal = TRUE) {
   if (is.null(w)) w <- rep(1, length(x))
   valid <- !is.na(x) & !is.na(w) & w > 0
   x <- x[valid]; w <- w[valid]
   if (length(x) == 0) return("")
   if (is_cont) {
-    d   <- survey::svydesign(ids = ~1, data = data.frame(x = x), weights = ~w)
-    wm  <- as.numeric(survey::svymean(~x, d))
-    wsd <- sqrt(as.numeric(survey::svyvar(~x, d)))
-    sprintf("%.1f ± %.1f", wm, wsd)
+    d <- survey::svydesign(ids = ~1, data = data.frame(x = x), weights = ~w)
+    if (isTRUE(is_normal)) {
+      wm  <- as.numeric(survey::svymean(~x, d))
+      wsd <- sqrt(as.numeric(survey::svyvar(~x, d)))
+      sprintf("%.1f ± %.1f", wm, wsd)
+    } else {
+      ord  <- order(x); xs <- x[ord]; ws <- w[ord]
+      cumw <- cumsum(ws) / sum(ws)
+      wq   <- function(p) xs[which(cumw >= p)[1]]
+      sprintf("%.1f [%.1f, %.1f]", wq(0.5), wq(0.25), wq(0.75))
+    }
   } else {
     xf   <- as.factor(x)
     ux   <- levels(xf)
@@ -131,9 +138,14 @@ compute_balance_stats <- function(df, grp_var, covs, weights = NULL) {
     complete <- !is.na(x) & !is.na(grp_vals)
     xc <- x[complete]; gc <- as.character(grp_vals[complete]); wc <- w_all[complete]
 
-    overall_val <- fmt_stat_w(xc, wc, is_cont)
+    is_normal <- if (is_cont) {
+      n <- length(xc)
+      if (n >= 3 && n <= 5000) tryCatch(shapiro.test(xc)$p.value > 0.05, error = function(e) FALSE)
+      else FALSE
+    } else TRUE
+    overall_val <- fmt_stat_w(xc, wc, is_cont, is_normal)
     grp_stats <- setNames(
-      lapply(grp_levels, function(gl) fmt_stat_w(xc[gc == gl], wc[gc == gl], is_cont)),
+      lapply(grp_levels, function(gl) fmt_stat_w(xc[gc == gl], wc[gc == gl], is_cont, is_normal)),
       grp_levels
     )
     smd_val <- tryCatch({

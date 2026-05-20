@@ -558,6 +558,9 @@ if (length(balanced) > 0) {
 }
 
 # ── 9. best_result.json 저장 ──────────────────────────────────────────
+best_item$cfg$covariates <- best_item$cfg$covariates[
+  order(match(best_item$cfg$covariates, candidates))
+]
 best_out <- list(
   mode       = mode,
   treat      = treat,
