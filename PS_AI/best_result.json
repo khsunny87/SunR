@@ -2,21 +2,21 @@
   "mode": "matching",
   "treat": "DCD",
   "estimand": "ATT",
-  "smd_cutoff": 0.15,
+  "smd_cutoff": 0.1,
   "best_config": {
-    "covariates": ["Age", "Male", "single_lung", "multi_organ", "Race_White", "Height", "Weight", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "INIT_single_lung", "Tx_interval", "DON_Age", "DON_Male", "DON_Race_White", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
-    "caliper": 0.3,
-    "ratio": 3,
+    "covariates": ["Age", "Male", "single_lung", "multi_organ", "Race_White", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "DON_Age", "DON_Male", "DON_Race_White", "DON_smoking20", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
+    "caliper": 0.2,
+    "ratio": "N",
     "method": "nearest",
-    "distance": "probit",
-    "reasoning": "Balanced at N=54. Push ratio higher to 5 and caliper to 0.3 to increase effective sample size further while keeping balance."
+    "distance": "linear.logit",
+    "reasoning": "Match rate jumped to 83.6% by removing missing-data covariates! But Smoking, DON_smoking20, DON_Diabetes, DON_PFR became imbalanced. Add these back but keep Tx_interval and INIT_single_lung removed (they look balanced even without inclusion). This may push back to 79% though - test it."
   },
   "result_summary": {
     "balanced": true,
-    "matched_n": 55,
-    "effective_n": 55,
-    "matching_rate": 0.8209,
-    "max_smd": 0.1172,
-    "n_iterations": 17
+    "matched_n": 54,
+    "effective_n": 54,
+    "matching_rate": 0.806,
+    "max_smd": 0.0681,
+    "n_iterations": 18
   }
 }
