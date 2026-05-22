@@ -119,6 +119,10 @@ cat("\n")
 
 run_matching <- function(cfg) {
   covs <- cfg$covariates
+  invalid <- covs[!covs %in% names(df)]
+  if (length(invalid) > 0)
+    cat(sprintf("  [경고] 없는 공변량 제외: %s\n", paste(invalid, collapse = ", ")))
+  covs <- covs[covs %in% names(df)]
   if (length(covs) == 0) return(NULL)
 
   # 전체 원본 df에서 선택 공변량 기준 complete.cases (df 불변)
@@ -165,6 +169,10 @@ last_iptw_fail <- ""
 
 run_iptw <- function(cfg) {
   covs <- cfg$covariates
+  invalid <- covs[!covs %in% names(df)]
+  if (length(invalid) > 0)
+    cat(sprintf("  [경고] 없는 공변량 제외: %s\n", paste(invalid, collapse = ", ")))
+  covs <- covs[covs %in% names(df)]
   if (length(covs) == 0) return(NULL)
 
   # 전체 원본 df에서 선택 공변량 기준 complete.cases (df 불변)
