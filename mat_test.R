@@ -230,18 +230,16 @@ shapiro_error<-function(x){
 #int_num("calc_losad")
 
 
-SMD_labelled <- function(data, variable, by, conf.level, ...) {
-  data <- data[c(variable, by)]
-  tmp_x=data[[variable]]
-  
-  #map(tmp_x,function(x) class(x)[1]<<-ifelse(class(x)[1]=="numeric",class(x)[2],class(x)[1]))
-  
-  class(tmp_x)[1]<-ifelse(class(tmp_x)[1]=="labelled",class(tmp_x)[2],class(tmp_x)[1])
-  #  print(class(tmp_x))
-  ret<-smd::smd(x = tmp_x, g = data[[by]], na.rm = T)[2]
-  names(ret)<-"SMD"
+SMD_labelled <- function(data, variable, by, ...) {
+  # weights 컬럼이 있으면 사용
+  w <- if ("weights" %in% names(data)) data$weights else NULL
+  tmp_x <- data[[variable]]
+  class(tmp_x)[1] <- ifelse(class(tmp_x)[1]=="labelled", class(tmp_x)[2], class(tmp_x)[1])
+  ret <- smd::smd(x=tmp_x, g=data[[by]], w=w, na.rm=TRUE)[2]
+  names(ret) <- "SMD"
   return(ret)
 }
+
 
 
 
@@ -355,7 +353,7 @@ Get_svTable <- function(data, include, by_key, type_list, del_var=c(), norm_var=
 
 matching_cov<-c("Age", "Male", "single_lung", "multi_organ", "Race_White", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "DON_Age", "DON_Male", "DON_Race_White", "DON_smoking20", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance")
 
-prematch<-read_csv("pre_match.csv")%>%
+prematch<-read_csv("PS_AI/pre_match.csv")%>%
   drop_na(any_of(matching_cov))
 
 
