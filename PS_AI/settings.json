@@ -6,7 +6,7 @@
   "candidates": [],
   "option": {
     "method":"nearest",
-    "ratio": -1,
-    "matching_rate": 0.9
+    "ratio": 3,
+    "matching_rate": 0.8
   }
 }

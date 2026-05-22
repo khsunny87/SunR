@@ -103,6 +103,7 @@ n_treat  <- sum(df[[treat]] == 1, na.rm = TRUE)
 n_ctrl   <- sum(df[[treat]] == 0, na.rm = TRUE)
 min_rate      <- if (mode == "matching") as.numeric(opt$matching_rate %||% 0.9) else 0
 fixed_method  <- { m <- tolower(opt$method %||% "auto"); if (m == "auto" || nchar(m) == 0) NULL else m }
+fixed_ratio   <- { r <- opt$ratio %||% -1; if (identical(r, -1)) NULL else r }
 
 # NA 포함 변수 파악 (candidates 기준, 스크립트 시작 시 1회만)
 na_vars <- names(which(colSums(is.na(df[candidates])) > 0))
@@ -140,7 +141,7 @@ run_matching <- function(cfg) {
 
   f <- as.formula(paste(treat, "~", paste(covs, collapse = " + ")))
 
-  ratio_raw <- cfg$ratio %||% 1
+  ratio_raw <- if (!is.null(fixed_ratio)) fixed_ratio else cfg$ratio %||% 1
   ratio_val <- if (identical(ratio_raw, -1) || toupper(as.character(ratio_raw)) == "N") {
     floor(n_ctrl_cc / n_treat)   # ratio는 cc 기준 대조군 / 전체 처치군
   } else {
@@ -563,6 +564,8 @@ if (length(balanced) > 0) {
 best_item$cfg$covariates <- best_item$cfg$covariates[
   order(match(best_item$cfg$covariates, candidates))
 ]
+if (!is.null(fixed_ratio))  best_item$cfg$ratio  <- fixed_ratio
+if (!is.null(fixed_method)) best_item$cfg$method <- fixed_method
 best_out <- list(
   mode       = mode,
   treat      = treat,
