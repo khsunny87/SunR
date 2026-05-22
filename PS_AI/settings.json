@@ -7,6 +7,6 @@
   "option": {
     "method":"auto",
     "stabilize": false,
-    "trim": false
+    "trim": true
   }
 }

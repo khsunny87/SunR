@@ -4,18 +4,18 @@
   "estimand": "ATE",
   "smd_cutoff": 0.15,
   "best_config": {
-    "covariates": ["Age", "Male", "single_lung", "Race_White", "Height", "Weight", "Smoking", "Dialysis", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "INIT_single_lung", "DON_Age", "DON_Male", "DON_Race_White", "DON_Height", "DON_PFR", "DON_Distance"],
+    "covariates": ["Age", "Male", "single_lung", "Race_White", "Height", "Weight", "Smoking", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "DON_Age", "DON_Male", "DON_Race_White", "DON_Diabetes", "DON_Height", "DON_PFR", "DON_Distance"],
     "method": "cbps",
     "stabilize": false,
-    "trim": false,
-    "reasoning": "CBPS achieved excellent balance on included covariates. Only Dialysis remains imbalanced (not included). Adding Dialysis to the model to balance it."
+    "trim": true,
+    "reasoning": "Close to balance. Adding DON_Diabetes to the model to balance it directly. mPAP and DON_Age are just barely over threshold and should improve with CBPS optimization."
   },
   "result_summary": {
     "balanced": true,
     "matched_n": 1051,
-    "effective_n": 26,
+    "effective_n": 39,
     "matching_rate": 1,
-    "max_smd": 0.1136,
-    "n_iterations": 15
+    "max_smd": 0.149,
+    "n_iterations": 16
   }
 }

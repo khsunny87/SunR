@@ -131,13 +131,14 @@ run_matching <- function(cfg) {
   n_drop <- nrow(df) - nrow(df_cc)
   if (n_drop > 0) cat(sprintf("  (결측 %d행 제거 → %d행)\n", n_drop, nrow(df_cc)))
 
-  n_ctrl_cc <- sum(df_cc[[treat]] == 0, na.rm = TRUE)
+  n_treat_cc <- sum(df_cc[[treat]] == 1, na.rm = TRUE)
+  n_ctrl_cc  <- sum(df_cc[[treat]] == 0, na.rm = TRUE)
 
   f <- as.formula(paste(treat, "~", paste(covs, collapse = " + ")))
 
   ratio_raw <- if (!is.null(fixed_ratio)) fixed_ratio else cfg$ratio %||% 1
   ratio_val <- if (identical(ratio_raw, -1) || toupper(as.character(ratio_raw)) == "N") {
-    floor(n_ctrl_cc / n_treat)   # ratio는 cc 기준 대조군 / 전체 처치군
+    floor(n_ctrl_cc / n_treat_cc)  # CC 기준 대조군 / CC 기준 처치군
   } else {
     max(1L, as.integer(ratio_raw))
   }
