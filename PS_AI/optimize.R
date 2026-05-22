@@ -491,8 +491,9 @@ for (i in seq_len(max_iter)) {
                 max(bal$smd, na.rm = TRUE),
                 if (bal$balanced) "YES" else "NO"))
 
-    eff_n <- if (mode == "matching") bal$matched_n else bal$effective_n
-    if (bal$balanced) {
+    eff_n        <- if (mode == "matching") bal$matched_n else bal$effective_n
+    rate_ok      <- mode != "matching" || bal$matching_rate >= min_rate
+    if (bal$balanced && rate_ok) {
       if (eff_n > best_bal_n) {
         best_bal_n <- eff_n
         no_improve_count <- 0L
@@ -521,7 +522,8 @@ for (i in seq_len(max_iter)) {
 
 # ── 8. 최적 결과 선택 ─────────────────────────────────────────────────
 all_results <- Filter(Negate(is.null), all_results)
-balanced    <- Filter(function(x) !is.null(x$bal) && x$bal$balanced, all_results)
+balanced    <- Filter(function(x) !is.null(x$bal) && x$bal$balanced &&
+                       (mode != "matching" || x$bal$matching_rate >= min_rate), all_results)
 
 if (length(balanced) > 0) {
   eff_ns    <- sapply(balanced, function(x)
