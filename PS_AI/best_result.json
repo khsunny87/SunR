@@ -5,18 +5,18 @@
   "smd_cutoff": 0.1,
   "best_config": {
     "covariates": ["Age", "Male", "single_lung", "multi_organ", "Race_White", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "DON_Age", "DON_Male", "DON_Race_White", "DON_smoking20", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
-    "caliper": 0.2,
+    "caliper": 1,
     "ratio": "N",
     "method": "nearest",
-    "distance": "linear.logit",
-    "reasoning": "Match rate jumped to 83.6% by removing missing-data covariates! But Smoking, DON_smoking20, DON_Diabetes, DON_PFR became imbalanced. Add these back but keep Tx_interval and INIT_single_lung removed (they look balanced even without inclusion). This may push back to 79% though - test it."
+    "distance": "logit",
+    "reasoning": "Balanced but at 79.1% (just below 80%). Substantially relax caliper to 1.0 to allow more matches and push rate above 80%."
   },
   "result_summary": {
     "balanced": true,
     "matched_n": 54,
     "effective_n": 54,
     "matching_rate": 0.806,
-    "max_smd": 0.0681,
-    "n_iterations": 18
+    "max_smd": 0.0608,
+    "n_iterations": 22
   }
 }

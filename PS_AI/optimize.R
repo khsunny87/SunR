@@ -39,20 +39,10 @@ calc_survey_smd <- function(df_data, grp_var, cov_names, weights) {
     complete <- !is.na(x) & !is.na(t_vals)
     xc <- x[complete]; gc <- t_vals[complete]; wc <- weights[complete]
     if (length(unique(gc)) < 2) return(NA_real_)
-    tryCatch({
-      if (is.numeric(xc)) {
-        calc_grp <- function(vals, ws) {
-          d <- survey::svydesign(ids = ~1, data = data.frame(x = vals), weights = ~ws)
-          list(m = as.numeric(survey::svymean(~x, d)),
-               v = as.numeric(survey::svyvar(~x, d)))
-        }
-        s1 <- calc_grp(xc[gc == 1], wc[gc == 1])
-        s2 <- calc_grp(xc[gc == 0], wc[gc == 0])
-        abs(s1$m - s2$m) / sqrt((s1$v + s2$v) / 2)
-      } else {
-        abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = FALSE)$estimate)
-      }
-    }, error = function(e) NA_real_)
+    tryCatch(
+      abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = TRUE)$estimate),
+      error = function(e) NA_real_
+    )
   }, FUN.VALUE = numeric(1))
 }
 

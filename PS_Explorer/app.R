@@ -150,18 +150,9 @@ compute_balance_stats <- function(df, grp_var, covs, weights = NULL) {
     )
     smd_val <- tryCatch({
       if (is.null(weights)) {
-        abs(smd::smd(x = xc, g = factor(gc), na.rm = FALSE)$estimate)
-      } else if (is_cont) {
-        g1 <- gc == grp_levels[1]; g2 <- gc == grp_levels[2]
-        calc_grp <- function(vals, ws) {
-          d <- survey::svydesign(ids = ~1, data = data.frame(x = vals), weights = ~ws)
-          list(m = as.numeric(survey::svymean(~x, d)),
-               v = as.numeric(survey::svyvar(~x, d)))
-        }
-        s1 <- calc_grp(xc[g1], wc[g1]); s2 <- calc_grp(xc[g2], wc[g2])
-        abs(s1$m - s2$m) / sqrt((s1$v + s2$v) / 2)
+        abs(smd::smd(x = xc, g = factor(gc), na.rm = TRUE)$estimate)
       } else {
-        abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = FALSE)$estimate)
+        abs(smd::smd(x = xc, g = factor(gc), w = wc, na.rm = TRUE)$estimate)
       }
     }, error = function(e) NA_real_)
 
