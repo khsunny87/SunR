@@ -1,0 +1,12 @@
+{
+  "mode": "IPTW",
+  "treat": "DCD",
+  "estimand": "ATE",
+  "smd_cutoff": 0.1,
+  "candidates": [],
+  "option": {
+    "method":"auto",
+    "stabilize": false,
+    "trim": false
+  }
+}
