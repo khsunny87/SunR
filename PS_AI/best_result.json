@@ -4,19 +4,19 @@
   "estimand": "ATT",
   "smd_cutoff": 0.15,
   "best_config": {
-    "covariates": ["Age", "Male", "single_lung", "Race_White", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "INIT_single_lung", "Tx_interval", "DON_Age", "DON_Male", "DON_Race_White", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
-    "caliper": 0.2,
+    "covariates": ["Age", "Male", "single_lung", "EVLP", "Race_White", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "mPAP", "ECMO", "waitlist_days", "Dx_OB", "Tx_interval", "DON_Age", "DON_Male", "DON_Race_White", "DON_Diabetes", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
+    "caliper": 0,
     "ratio": 2,
     "method": "nearest",
-    "distance": "logit",
-    "reasoning": "Add Dialysis and Tx_interval to PS model. Remove DON_smoking20 (it was OK in iter 5). This is similar to iter 5 setup which was very close to balance."
+    "distance": "linear.logit",
+    "reasoning": "Remove caliper to allow all 66 treated to be matched, potentially increasing matched N. Balance may still hold given good propensity model."
   },
   "result_summary": {
     "balanced": true,
-    "matched_n": 55,
-    "effective_n": 55,
-    "matching_rate": 0.8333,
-    "max_smd": 0.1266,
-    "n_iterations": 17
+    "matched_n": 51,
+    "effective_n": 51,
+    "matching_rate": 0.7727,
+    "max_smd": 0.145,
+    "n_iterations": 33
   }
 }
