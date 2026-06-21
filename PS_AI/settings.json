@@ -1,12 +1,12 @@
 {
-  "mode": "IPTW",
+  "mode": "matching",
   "treat": "DCD",
-  "estimand": "ATE",
+  "estimand": "ATT",
   "smd_cutoff": 0.15,
   "candidates": [],
   "option": {
-    "method":"auto",
-    "stabilize": false,
-    "trim": true
+    "method":"nearest",
+    "ratio": 2,
+    "matching_rate": 0.77
   }
 }
