@@ -352,11 +352,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
 }
 
 
-
-
-
-
-Get_adj_KM <- function(cox_fit, strata_name = NULL, break.by = 5, xmax = 20,
+Get_adj_KM <- function(cox_fit, data, strata_name = NULL, break.by = 5, xmax = 20,
                         unit = 'Year', conf.int = T,
                         palette = c(muted("blue"), muted("red")),
                         type = 'survival', y_title = 'Survival', y_lim = c(0, 1),
@@ -375,20 +371,19 @@ Get_adj_KM <- function(cox_fit, strata_name = NULL, break.by = 5, xmax = 20,
 
   } else {
 
-    # cox_fit (no strata) -> curve용 strata 모델 내부 조립
-    old_formula <- formula(cox_fit$call)
+    old_formula <- formula(cox_fit)
     rhs_terms <- attr(terms(old_formula), "term.labels")
     new_terms <- c(setdiff(rhs_terms, strata_name), paste0("strata(", strata_name, ")"))
     strata_formula <- reformulate(new_terms, response = old_formula[[2]])
 
-    cox_strat <- update(cox_fit, formula = strata_formula)
+    cox_strat <- coxph(strata_formula, data = data)
     res <- survfit2(cox_strat)
 
     fit_strata <- names(res$strata)
     Group_label <- gsub(".*=", "", fit_strata)
 
     if (P_v == "" & print_p) {
-      cox_sum <- summary(cox_fit)  # 원래 cox_fit에서 HR 추출
+      cox_sum <- summary(cox_fit)
       term <- rownames(cox_sum$coefficients)[
         grepl(paste0("^", strata_name), rownames(cox_sum$coefficients))
       ][1]
