@@ -351,8 +351,7 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
   return(list(tbl=cmp_tbl_overall,fig=cmp_fig,norisk=cmp_fig_no_risk))
 }
 
-
-Get_adj_KM <- function(cox_fit, data, strata_name = NULL, break.by = 5, xmax = 20,
+Get_adj_KM <- function(cox_fit, strata_name = NULL, break.by = 5, xmax = 20,
                         unit = 'Year', conf.int = T,
                         palette = c(muted("blue"), muted("red")),
                         type = 'survival', y_title = 'Survival', y_lim = c(0, 1),
@@ -371,12 +370,14 @@ Get_adj_KM <- function(cox_fit, data, strata_name = NULL, break.by = 5, xmax = 2
 
   } else {
 
+    # update() 대신 명시적으로 data와 formula를 cox_fit에서 추출
+    fit_data <- eval(cox_fit$call$data, envir = environment(formula(cox_fit)))
     old_formula <- formula(cox_fit)
     rhs_terms <- attr(terms(old_formula), "term.labels")
     new_terms <- c(setdiff(rhs_terms, strata_name), paste0("strata(", strata_name, ")"))
     strata_formula <- reformulate(new_terms, response = old_formula[[2]])
 
-    cox_strat <- coxph(strata_formula, data = data)
+    cox_strat <- coxph(strata_formula, data = fit_data)
     res <- survfit2(cox_strat)
 
     fit_strata <- names(res$strata)
