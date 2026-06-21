@@ -353,3 +353,91 @@ Get_CMP<-function(data,TS_name,Group_name="",Group_label=NULL,break.by=5,xmax=20
 
 
 
+
+
+
+Get_adj_KM <- function(cox_fit, strata_name = NULL, break.by = 5, xmax = 20,
+                        unit = 'Year', conf.int = T,
+                        palette = c(muted("blue"), muted("red")),
+                        type = 'survival', y_title = 'Survival', y_lim = c(0, 1),
+                        P_x = 0, P_y = Inf, main_title = "", P_v = "",
+                        print_p = T){
+
+  if (is.null(strata_name)) {
+
+    res <- survfit2(cox_fit)
+    Group_label <- "Overall"
+    print_p <- F
+    P_v <- ""
+    km_fig <- res %>%
+      ggsurvfit(type = type, linewidth = 1, color = muted('blue')) +
+      if (conf.int) add_confidence_interval(fill = muted('blue'))
+
+  } else {
+
+    # cox_fit (no strata) -> curve용 strata 모델 내부 조립
+    old_formula <- formula(cox_fit$call)
+    rhs_terms <- attr(terms(old_formula), "term.labels")
+    new_terms <- c(setdiff(rhs_terms, strata_name), paste0("strata(", strata_name, ")"))
+    strata_formula <- reformulate(new_terms, response = old_formula[[2]])
+
+    cox_strat <- update(cox_fit, formula = strata_formula)
+    res <- survfit2(cox_strat)
+
+    fit_strata <- names(res$strata)
+    Group_label <- gsub(".*=", "", fit_strata)
+
+    if (P_v == "" & print_p) {
+      cox_sum <- summary(cox_fit)  # 원래 cox_fit에서 HR 추출
+      term <- rownames(cox_sum$coefficients)[
+        grepl(paste0("^", strata_name), rownames(cox_sum$coefficients))
+      ][1]
+
+      hr <- cox_sum$conf.int[term, "exp(coef)"]
+      l  <- cox_sum$conf.int[term, "lower .95"]
+      u  <- cox_sum$conf.int[term, "upper .95"]
+      p  <- cox_sum$coefficients[term, "Pr(>|z|)"]
+
+      P_v <- paste0("HR = ", sprintf("%.2f", hr),
+                    " (", sprintf("%.2f", l), "-", sprintf("%.2f", u), "), ",
+                    "P = ", sprintf("%.3f", p))
+    }
+
+    km_fig <- res %>%
+      ggsurvfit(type = type, linewidth = 1) +
+      scale_color_manual(values = palette, labels = Group_label) +
+      scale_fill_manual(values = palette, labels = Group_label) +
+      if (conf.int) add_confidence_interval()
+  }
+
+  km_fig <- km_fig +
+    add_censor_mark(size = 2) +
+    labs(x = unit, y = y_title) +
+    { if (print_p) annotate("text", x = P_x, y = P_y, label = P_v, size = 7, hjust = 0, vjust = 2) else NULL } +
+    scale_x_continuous(labels = function(x) x, breaks = seq(0, xmax, by = break.by)) +
+    scale_y_continuous(labels = scales::percent, limits = y_lim) +
+    theme_classic() +
+    theme(axis.title.x = element_text(face = 'bold', size = 18),
+          axis.title.y = element_text(face = 'bold', size = 18),
+          axis.text = element_text(size = 20),
+          legend.text = element_text(size = 17, color = "black", face = "bold"),
+          legend.position = "bottom") +
+    coord_cartesian(xlim = c(0, xmax))
+
+  if (main_title != "") {
+    km_fig <- km_fig + ggtitle(main_title) +
+      theme(plot.title = element_text(size = 20, face = "bold"))
+  }
+
+  km_fig_no_risk <- km_fig
+
+  km_fig <- km_fig +
+    add_risktable(risktable_height = 0.2, risktable_stats = "n.risk", size = 6,
+                  theme = list(theme_void(),
+                               theme(title = element_text(size = 15),
+                                     axis.text.y = element_text(size = 15),
+                                     axis.title.y = element_blank(),
+                                     axis.title.x = element_blank())))
+
+  return(list(fig = km_fig, norisk = km_fig_no_risk))
+}
