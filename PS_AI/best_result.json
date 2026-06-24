@@ -2,21 +2,21 @@
   "mode": "matching",
   "treat": "DCD",
   "estimand": "ATT",
-  "smd_cutoff": 0.15,
+  "smd_cutoff": 0.2,
   "best_config": {
-    "covariates": ["Age", "Male", "single_lung", "EVLP", "Race_White", "Height", "Weight", "Diabetes", "Smoking", "Dialysis", "mPAP", "ECMO", "waitlist_days", "Dx_OB", "Tx_interval", "DON_Age", "DON_Male", "DON_Race_White", "DON_Diabetes", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
-    "caliper": 0,
+    "covariates": ["Age", "Male", "single_lung", "EVLP", "Race_White", "Height", "Weight", "Diabetes", "Dialysis", "Creatinine", "mPAP", "MV", "ECMO", "waitlist_days", "Dx_OB", "DON_Age", "DON_Male", "DON_Race_White", "DON_Diabetes", "DON_HTN", "DON_Height", "DON_Weight", "DON_PFR", "DON_Distance"],
+    "caliper": 0.25,
     "ratio": 2,
     "method": "nearest",
-    "distance": "linear.logit",
-    "reasoning": "Remove caliper to allow all 66 treated to be matched, potentially increasing matched N. Balance may still hold given good propensity model."
+    "distance": "probit",
+    "reasoning": "Iter 32 was balanced at 75.8%. Try ratio 4 and slightly looser caliper to get more controls per match, increasing total balanced N. Keep same covariate set."
   },
   "result_summary": {
     "balanced": true,
     "matched_n": 51,
     "effective_n": 51,
     "matching_rate": 0.7727,
-    "max_smd": 0.145,
-    "n_iterations": 33
+    "max_smd": 0.1438,
+    "n_iterations": 38
   }
 }

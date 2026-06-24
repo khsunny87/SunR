@@ -14,6 +14,7 @@ suppressPackageStartupMessages({
   library(survival)
   library(WeightIt)
   library(survey)
+  library(pROC)
 })
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -296,7 +297,23 @@ main <- mainPanel(
         tabPanel("Balance Plot", br(),
                  selectInput("bal_var", "변수 선택", choices = NULL),
                  plotOutput("bal_plot", height = "420px")),
-        tabPanel("Balance Table", br(), DTOutput("bal_tbl"))
+        tabPanel("Balance Table", br(), DTOutput("bal_tbl")),
+        tabPanel("ROC",
+          conditionalPanel(
+            condition = "input.ps_method == 'matching'",
+            br(),
+            plotOutput("roc_plot", height = "420px"),
+            br(),
+            verbatimTextOutput("roc_text")
+          )
+        ),
+        tabPanel("Delta PS",
+          conditionalPanel(
+            condition = "input.ps_method == 'matching'",
+            br(),
+            tableOutput("delta_ps_tbl")
+          )
+        )
       )
     )
   )
@@ -804,6 +821,88 @@ server <- function(input, output, session) {
                     backgroundColor = DT::styleEqual(c("ok","imbal"), c(NA, "lightyellow")),
                     fontWeight      = DT::styleEqual(c("ok","imbal"), c("normal","bold")))
   })
+
+  output$roc_plot <- renderPlot({
+    req(input$ps_method == "matching")
+    res <- ps_result(); req(res)
+
+    ps      <- res$distance
+    treat_v <- as.integer(res$treat)
+
+    roc_pre  <- pROC::roc(treat_v, ps, quiet = TRUE)
+    auc_pre  <- pROC::ci.auc(roc_pre, method = "delong")
+
+    md       <- MatchIt::match.data(res)
+    idx      <- rownames(md)
+    roc_post <- pROC::roc(as.integer(res$treat[idx]), res$distance[idx], quiet = TRUE)
+    auc_post <- pROC::ci.auc(roc_post, method = "delong")
+
+    df_pre  <- as.data.frame(pROC::coords(roc_pre,  "all", ret = c("specificity","sensitivity"), transpose = FALSE))
+    df_post <- as.data.frame(pROC::coords(roc_post, "all", ret = c("specificity","sensitivity"), transpose = FALSE))
+    df_pre$group  <- sprintf("Pre-match  (AUC = %.3f)", auc_pre[2])
+    df_post$group <- sprintf("Post-match (AUC = %.3f)", auc_post[2])
+
+    ggplot(rbind(df_pre, df_post),
+           aes(x = 1 - specificity, y = sensitivity, color = group)) +
+      geom_line(linewidth = 0.9) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray60") +
+      scale_color_manual(values = c("steelblue", "tomato"),
+                         breaks = c(df_pre$group[1], df_post$group[1])) +
+      labs(x = "1 - Specificity", y = "Sensitivity",
+           title = "Propensity Score ROC Curve", color = NULL) +
+      theme_bw(base_size = 13) +
+      theme(legend.position = "bottom")
+  })
+
+  output$roc_text <- renderPrint({
+    req(input$ps_method == "matching")
+    res <- ps_result(); req(res)
+
+    roc_pre <- pROC::roc(as.integer(res$treat), res$distance, quiet = TRUE)
+    ci_pre  <- pROC::ci.auc(roc_pre, method = "delong")
+
+    md      <- MatchIt::match.data(res)
+    idx     <- rownames(md)
+    roc_post <- pROC::roc(as.integer(res$treat[idx]), res$distance[idx], quiet = TRUE)
+    ci_post  <- pROC::ci.auc(roc_post, method = "delong")
+
+    cat(sprintf("Pre-match  AUC: %.3f  (95%% CI: %.3f – %.3f)\n",
+                ci_pre[2],  ci_pre[1],  ci_pre[3]))
+    cat(sprintf("Post-match AUC: %.3f  (95%% CI: %.3f – %.3f)\n",
+                ci_post[2], ci_post[1], ci_post[3]))
+  })
+
+  output$delta_ps_tbl <- renderTable({
+    req(input$ps_method == "matching")
+    res <- ps_result(); req(res)
+
+    mm     <- res$match.matrix
+    ps_all <- res$distance
+    all_dPS <- numeric(0)
+    if (!is.null(mm)) {
+      for (j in seq_len(nrow(mm))) {
+        tid  <- rownames(mm)[j]
+        cids <- mm[j, ][!is.na(mm[j, ])]
+        if (length(cids) == 0) next
+        all_dPS <- c(all_dPS, abs(ps_all[tid] - ps_all[cids]))
+      }
+    }
+
+    n_total <- length(all_dPS)
+    n_exc   <- sum(all_dPS <= 0.01)
+    n_acc   <- sum(all_dPS > 0.01 & all_dPS <= 0.1)
+    n_dan   <- sum(all_dPS > 0.1)
+
+    data.frame(
+      구분 = c("총 쌍", "Excellent (≤0.01)", "Acceptable (0.01–0.1)", "Danger (>0.1)"),
+      개수 = c(n_total, n_exc, n_acc, n_dan),
+      비율 = c("100%",
+               sprintf("%.1f%%", n_exc / n_total * 100),
+               sprintf("%.1f%%", n_acc / n_total * 100),
+               sprintf("%.1f%%", n_dan / n_total * 100)),
+      check.names = FALSE
+    )
+  }, striped = TRUE, hover = TRUE, bordered = TRUE)
 }
 
 shinyApp(ui, server)

@@ -94,6 +94,8 @@ n_ctrl   <- sum(df[[treat]] == 0, na.rm = TRUE)
 min_rate      <- if (mode == "matching") as.numeric(opt$matching_rate %||% 0.9) else 0
 fixed_method  <- { m <- tolower(opt$method %||% "auto"); if (m == "auto" || nchar(m) == 0) NULL else m }
 fixed_ratio   <- { r <- opt$ratio %||% -1; if (identical(r, -1)) NULL else r }
+dPS_danger    <- as.numeric(opt$dPS_danger    %||% 0.1)
+accept_danger <- as.numeric(opt$accept_danger %||% 0.05)
 
 # NA 포함 변수 파악 (candidates 기준, 스크립트 시작 시 1회만)
 na_vars <- names(which(colSums(is.na(df[candidates])) > 0))
@@ -104,8 +106,8 @@ method_disp <- if (mode == "matching") {
 cat(sprintf("모드: %s%s | 처치변수: %s | Estimand: %s\n", mode, method_disp, treat, estimand))
 cat(sprintf("데이터: %d행 | 처치군: %d | 대조군: %d\n", nrow(df), n_treat, n_ctrl))
 if (mode == "matching") {
-  cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f | 최소 매칭율: %.0f%%\n",
-              length(candidates), smd_cutoff, min_rate * 100))
+  cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f | 최소 매칭율: %.0f%% | accept_danger %.1f%%\n",
+              length(candidates), smd_cutoff, min_rate * 100, accept_danger * 100))
 } else {
   cat(sprintf("공변량 후보: %d개 | SMD 임계값: %.2f\n",
               length(candidates), smd_cutoff))
@@ -249,6 +251,22 @@ compute_balance <- function(result, cfg) {
       effective_n    <- matched_n
       ess_t          <- NA_real_; ess_c <- NA_real_
       wsum_treat     <- NA_real_; wsum_ctrl <- NA_real_
+
+      mm     <- result$match.matrix
+      ps_all <- result$distance
+      all_dPS <- numeric(0)
+      if (!is.null(mm)) {
+        for (j in seq_len(nrow(mm))) {
+          tid  <- rownames(mm)[j]
+          cids <- mm[j, ][!is.na(mm[j, ])]
+          if (length(cids) == 0) next
+          all_dPS <- c(all_dPS, abs(ps_all[tid] - ps_all[cids]))
+        }
+      }
+      n_pairs_dp  <- length(all_dPS)
+      n_danger_dp <- sum(all_dPS >= dPS_danger, na.rm = TRUE)
+      prop_danger <- if (n_pairs_dp > 0) n_danger_dp / n_pairs_dp else 0
+      danger_ok   <- prop_danger <= accept_danger
     } else {
       # ── IPTW: survey 기반 SMD (PS_Explorer Balance Table과 동일)
       all_covs <- c(cfg$covariates, setdiff(candidates, cfg$covariates))
@@ -278,7 +296,11 @@ compute_balance <- function(result, cfg) {
       wsum_treat     = if (inherits(result, "matchit")) NA_real_ else wsum_treat,
       wsum_ctrl      = if (inherits(result, "matchit")) NA_real_ else wsum_ctrl,
       matching_rate  = rate,
-      balanced       = all(smd_vec < smd_cutoff)
+      balanced       = all(smd_vec < smd_cutoff),
+      n_pairs        = if (inherits(result, "matchit")) n_pairs_dp  else NA_integer_,
+      n_danger       = if (inherits(result, "matchit")) n_danger_dp else NA_integer_,
+      prop_danger    = if (inherits(result, "matchit")) prop_danger else NA_real_,
+      danger_ok      = if (inherits(result, "matchit")) danger_ok   else TRUE
     )
   }, error = function(e) {
     cat("  [Balance 오류]", conditionMessage(e), "\n"); NULL
@@ -302,8 +324,11 @@ format_result_msg <- function(iter, cfg, bal) {
   }
 
   n_line <- if (mode == "matching") {
-    sprintf("Matched N (treated): %d / %d | Rate: %.1f%%",
-            bal$matched_n, n_treat, bal$matching_rate * 100)
+    danger_info <- sprintf(", dPS_danger: %d/%d (%.0f%%)%s",
+      bal$n_danger, bal$n_pairs, bal$prop_danger * 100,
+      if (!isTRUE(bal$danger_ok)) " EXCEEDED" else "")
+    sprintf("Matched N (treated): %d / %d | Rate: %.1f%%%s",
+            bal$matched_n, n_treat, bal$matching_rate * 100, danger_info)
   } else {
     sprintf("Σw treat: %d, Σw ctrl: %d (all %d obs used, ESS: %d)",
             bal$wsum_treat, bal$wsum_ctrl, bal$matched_n, bal$effective_n)
@@ -381,7 +406,9 @@ if (mode == "matching") {
     "- distance options: logit, probit, linear.logit\n",
     "- caliper 0 means no caliper\n",
     "- ratio -1 means use floor(n_ctrl/n_treat) automatically\n",
-    sprintf("- matching_rate must be >= %.0f%%\n", min_rate * 100)
+    sprintf("- matching_rate must be >= %.0f%%\n", min_rate * 100),
+    sprintf("- dPS_danger: proportion of matched pairs with |ΔPS| >= %.2f must be <= %.0f%%; exceeding this counts as failure\n",
+            dPS_danger, accept_danger * 100)
   )
 } else {
   fmt_ex <- '{"covariates":[...],"method":"ps","stabilize":false,"trim":false,"reasoning":"..."}'
@@ -486,14 +513,27 @@ for (i in seq_len(max_iter)) {
                        bal$wsum_ctrl, bal$ess_ctrl,
                        bal$wsum_treat, bal$ess_treat)
     }
-    cat(sprintf("%s, maxSMD=%.3f, bal=%s\n",
-                n_str,
-                max(bal$smd, na.rm = TRUE),
-                if (bal$balanced) "YES" else "NO"))
+    if (mode == "matching") {
+      danger_warn_str <- if (!isTRUE(bal$danger_ok))
+        sprintf(" [>%.0f%%!]", accept_danger * 100) else ""
+      cat(sprintf("%s, maxSMD=%.3f, bal=%s, total pair %d, dPS_danger: %d (%.0f%%)%s\n",
+                  n_str,
+                  max(bal$smd, na.rm = TRUE),
+                  if (bal$balanced) "YES" else "NO",
+                  bal$n_pairs,
+                  bal$n_danger, bal$prop_danger * 100,
+                  danger_warn_str))
+    } else {
+      cat(sprintf("%s, maxSMD=%.3f, bal=%s\n",
+                  n_str,
+                  max(bal$smd, na.rm = TRUE),
+                  if (bal$balanced) "YES" else "NO"))
+    }
 
     eff_n        <- if (mode == "matching") bal$matched_n else bal$effective_n
     rate_ok      <- mode != "matching" || bal$matching_rate >= min_rate
-    if (bal$balanced && rate_ok) {
+    danger_ok    <- mode != "matching" || isTRUE(bal$danger_ok)
+    if (bal$balanced && rate_ok && danger_ok) {
       if (eff_n > best_bal_n) {
         best_bal_n <- eff_n
         no_improve_count <- 0L
@@ -523,7 +563,8 @@ for (i in seq_len(max_iter)) {
 # ── 8. 최적 결과 선택 ─────────────────────────────────────────────────
 all_results <- Filter(Negate(is.null), all_results)
 balanced    <- Filter(function(x) !is.null(x$bal) && x$bal$balanced &&
-                       (mode != "matching" || x$bal$matching_rate >= min_rate), all_results)
+                       (mode != "matching" || x$bal$matching_rate >= min_rate) &&
+                       (mode != "matching" || isTRUE(x$bal$danger_ok)), all_results)
 
 if (length(balanced) > 0) {
   eff_ns    <- sapply(balanced, function(x)

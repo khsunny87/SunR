@@ -2,11 +2,13 @@
   "mode": "matching",
   "treat": "DCD",
   "estimand": "ATT",
-  "smd_cutoff": 0.15,
+  "smd_cutoff": 0.2,
   "candidates": [],
   "option": {
-    "method":"nearest",
+    "method": "nearest",
     "ratio": 2,
-    "matching_rate": 0.75
+    "matching_rate": 0.75,
+    "dPS_danger": 0.1,
+    "accept_danger": 0.05
   }
 }

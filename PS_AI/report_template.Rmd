@@ -17,6 +17,7 @@ library(ggplot2)
 library(knitr)
 library(cobalt)
 library(jsonlite)
+library(pROC)
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
 # .report_data.rds 경로 탐색: Rmd 위치 기준 → 작업디렉토리 기준
@@ -212,6 +213,85 @@ if (!is.null(best$result) && inherits(best$result, "matchit") &&
   )
 } else {
   cat("PS Distribution: matching 결과 없음 또는 distance 미계산\n")
+}
+```
+
+---
+
+## ROC Curve
+
+```{r roc_curve, fig.height=5, error=TRUE}
+if (mode == "matching" && !is.null(best$result) &&
+    inherits(best$result, "matchit") && is.numeric(best$result$distance)) {
+
+  res <- best$result
+  ps      <- res$distance
+  treat_v <- as.integer(res$treat)
+
+  roc_pre  <- pROC::roc(treat_v, ps, quiet = TRUE)
+  auc_pre  <- pROC::ci.auc(roc_pre, method = "delong")
+
+  md  <- MatchIt::match.data(res)
+  idx <- rownames(md)
+  roc_post <- pROC::roc(as.integer(res$treat[idx]), res$distance[idx], quiet = TRUE)
+  auc_post <- pROC::ci.auc(roc_post, method = "delong")
+
+  df_pre  <- as.data.frame(pROC::coords(roc_pre,  "all", ret = c("specificity","sensitivity"), transpose = FALSE))
+  df_post <- as.data.frame(pROC::coords(roc_post, "all", ret = c("specificity","sensitivity"), transpose = FALSE))
+  df_pre$group  <- sprintf("Pre-match  (AUC = %.3f, 95%% CI: %.3f–%.3f)", auc_pre[2],  auc_pre[1],  auc_pre[3])
+  df_post$group <- sprintf("Post-match (AUC = %.3f, 95%% CI: %.3f–%.3f)", auc_post[2], auc_post[1], auc_post[3])
+
+  print(
+    ggplot(rbind(df_pre, df_post),
+           aes(x = 1 - specificity, y = sensitivity, color = group)) +
+      geom_line(linewidth = 0.9) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray60") +
+      scale_color_manual(values = c("steelblue", "tomato"),
+                         breaks = c(df_pre$group[1], df_post$group[1])) +
+      labs(x = "1 - Specificity", y = "Sensitivity",
+           title = "Propensity Score ROC Curve", color = NULL) +
+      theme_bw(base_size = 13) +
+      theme(legend.position = "bottom")
+  )
+} else {
+  cat("ROC Curve: matching 모드에서만 표시됩니다.\n")
+}
+```
+
+---
+
+## Delta PS
+
+```{r delta_ps, error=TRUE}
+if (mode == "matching" && !is.null(best$result) &&
+    inherits(best$result, "matchit") && !is.null(best$result$match.matrix)) {
+
+  mm     <- best$result$match.matrix
+  ps_all <- best$result$distance
+  all_dPS <- numeric(0)
+  for (j in seq_len(nrow(mm))) {
+    tid  <- rownames(mm)[j]
+    cids <- mm[j, ][!is.na(mm[j, ])]
+    if (length(cids) == 0) next
+    all_dPS <- c(all_dPS, abs(ps_all[tid] - ps_all[cids]))
+  }
+
+  n_total <- length(all_dPS)
+  n_exc   <- sum(all_dPS <= 0.01)
+  n_acc   <- sum(all_dPS > 0.01 & all_dPS <= 0.1)
+  n_dan   <- sum(all_dPS > 0.1)
+
+  kable(data.frame(
+    구분 = c("총 쌍", "Excellent (≤0.01)", "Acceptable (0.01–0.1)", "Danger (>0.1)"),
+    개수 = c(n_total, n_exc, n_acc, n_dan),
+    비율 = c("100%",
+             sprintf("%.1f%%", n_exc / n_total * 100),
+             sprintf("%.1f%%", n_acc / n_total * 100),
+             sprintf("%.1f%%", n_dan / n_total * 100)),
+    check.names = FALSE
+  ), align = c("l", "r", "r"))
+} else {
+  cat("Delta PS: matching 모드에서만 표시됩니다.\n")
 }
 ```
 
